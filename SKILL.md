@@ -292,6 +292,7 @@ ETF期权层 (V3.3 新增)
 - 用户要看**股东户数变化**（筹码集中度）
 - 用户要看**分红送转历史**（每股派息 + 送股 + 转增）
 - 用户要看**指数/ETF行情**（上证指数 / 沪深300 / 创业板指 / ETF）
+- 用户要分析**市场交易情绪 / 沪深 A 股日成交额趋势**（量能、成交额分位、放量缩量）
 - 用户要看**涨停 / 打板情绪**（涨停池 / 连板梯队 / 炸板率 / 跌停 / 涨停原因题材）
 - 用户要看**ETF 期权**（T型报价 / 希腊字母 Delta·Gamma·Theta·Vega / 隐含波动率 IV）
 - 用户要看**投资者互动问答**（公司如何回应某传闻/利好 · 互动易）
@@ -1004,6 +1005,28 @@ print(apply_adjust(bars, hfq, kind="hfq"))                # → 1274.28（后复
 > 不满足以上任一条，说明响应被截断或标的代码写错。
 
 ---
+
+### 1.5 沪深 A 股日成交额趋势 + 交易情绪（收盘后历史）
+
+> **统计口径：** 上交所主板 A + 科创板，深交所主板 A + 创业板 A；不含 B 股、基金、债券及北交所。数据均为两所收盘后的公开日度统计，因此历史可回溯；当天数据要待收盘统计完成后才能使用。不要将上证指数的成交量/成交额误称为全 A 股成交额。
+
+项目根目录的 `market_turnover_sentiment.py` 提供可直接复用的实现，依赖仅 `requests` 与 `pandas`（不依赖 akshare / openpyxl）：
+
+```python
+from market_turnover_sentiment import hs_a_share_turnover, turnover_sentiment
+
+# 首次拉取近一年会逐交易日访问两所公开统计并写入缓存；之后只补抓新数据。
+turnover = hs_a_share_turnover("2025-07-24", cache_path="hs_a_share_turnover.csv")
+sentiment = turnover_sentiment(turnover)
+
+# amount_yi=沪深 A 股成交额(亿元)；vs_ma20=相对20日均额；
+# percentile_120=近120日历史分位；liquidity_state=缩量/常态/放量。
+print(sentiment.tail(10)[[
+    "date", "amount_yi", "ma20_yi", "vs_ma20", "percentile_120", "liquidity_state"
+]])
+```
+
+**情绪解读：** `vs_ma20 < 0.75` 为明显缩量，`0.95~1.10` 为常态，`>1.35` 为显著放量。成交额只是参与度/流动性指标，不能单独推导多空方向；必须结合指数收益、涨跌家数、涨停/跌停和资金流判断“放量上涨”或“放量下跌”。
 
 ## Layer 2: 研报层
 

@@ -1,4 +1,22 @@
 .DS_Store
 __pycache__/
-*.pyc
+*.py[cod]
 reports/
+
+# Local watchlist and generated market-data caches
+/market_watchlist.json
+/hs_a_share_turnover.csv
+/market_index_daily_cache.csv
+/market_margin_balance.csv
+/market_sentiment_daily.csv
+/market_sentiment_intraday.csv
+/market_stock_daily_cache.csv.gz
+/market_stock_universe.csv
+/market_valuation_csi300.csv
+/market_valuation_csi_all.csv
+/market_valuation_payload.json
+/market_valuation_swa.csv
+
+# Generated dashboards and valuation reports
+/a-share-pe-valuation-report.html
+/market_sentiment_dashboard.html

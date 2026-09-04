@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股 PE-TTM 历史分位图（万得全A / 沪深300）· 2026-09-02</title>
+<style>
+:root{
+  --bg:#f7f8fa; --card:#ffffff; --ink:#1a1d24; --ink2:#4a5160; --ink3:#7b8494;
+  --line:#e3e6ec; --line2:#eef0f4;
+  --up:#d03a2c; --down:#128a5b; --neutral:#8a93a3;
+  --warn:#e08a1e; --accent:#2b5cd9; --band:#f0f3f8;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:var(--bg); color:var(--ink);
+  font-family:"PingFang SC","Microsoft YaHei","Hiragino Sans GB","Helvetica Neue",Arial,sans-serif;
+  font-size:14px; line-height:1.7; padding:28px 20px 60px;
+}
+.wrap{max-width:1240px;margin:0 auto}
+header{margin-bottom:24px;padding-bottom:20px;border-bottom:2px solid var(--ink)}
+h1{font-size:26px;font-weight:700;letter-spacing:-.3px;margin-bottom:8px}
+.sub{color:var(--ink2);font-size:14px}
+.meta{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
+.tag{background:var(--band);color:var(--ink2);padding:3px 10px;border-radius:4px;font-size:12px;border:1px solid var(--line)}
+.tag.hot{background:#fdeceb;color:var(--up);border-color:#f6cfcb}
+h2{font-size:18px;font-weight:700;margin:34px 0 6px;padding-left:11px;border-left:4px solid var(--accent)}
+h2 .en{font-size:12px;color:var(--ink3);font-weight:400;margin-left:8px}
+.lead{color:var(--ink2);font-size:13.5px;margin-bottom:16px;padding-left:15px}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px;margin-bottom:6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;box-shadow:0 1px 3px rgba(20,25,35,.04)}
+.card .ttl{font-size:13px;color:var(--ink3);margin-bottom:2px}
+.card .nm{font-size:16px;font-weight:700;margin-bottom:12px}
+.card .nm small{font-size:11px;color:var(--ink3);font-weight:400;margin-left:6px}
+.bigrow{display:flex;align-items:baseline;gap:14px;margin-bottom:10px}
+.bigv{font-size:34px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.pctchip{padding:4px 10px;border-radius:5px;font-size:13px;font-weight:700}
+.pctchip.p-low{background:#e6f5ee;color:var(--down)}
+.pctchip.p-mid{background:#fff6e6;color:var(--warn)}
+.pctchip.p-high{background:#fdeceb;color:var(--up)}
+.gauge{height:8px;background:linear-gradient(90deg,#128a5b 0%,#8fbf6a 20%,#e0c94a 45%,#e08a1e 70%,#d03a2c 100%);border-radius:4px;position:relative;margin:12px 0 6px}
+.gauge .pin{position:absolute;top:-5px;width:3px;height:18px;background:var(--ink);border-radius:2px}
+.gaugelbl{display:flex;justify-content:space-between;font-size:11px;color:var(--ink3)}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;margin-top:12px;padding-top:12px;border-top:1px dashed var(--line);font-size:12.5px}
+.kv div{display:flex;justify-content:space-between}
+.kv span:first-child{color:var(--ink3)}
+.kv span:last-child{font-weight:600;font-variant-numeric:tabular-nums}
+
+.chartbox{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px 8px;box-shadow:0 1px 3px rgba(20,25,35,.04);margin-bottom:14px}
+.ctrls{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px}
+.ctrls .lb{font-size:12px;color:var(--ink3);margin-right:2px}
+.btn{background:#fff;border:1px solid var(--line);color:var(--ink2);padding:4px 11px;border-radius:5px;cursor:pointer;font-size:12px;font-family:inherit;transition:.15s}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.on{background:var(--accent);border-color:var(--accent);color:#fff}
+svg{display:block;width:100%;height:auto}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--ink2);padding:4px 4px 8px}
+.legend i{display:inline-block;width:16px;height:3px;border-radius:2px;margin-right:5px;vertical-align:middle}
+.legend i.dash{height:0;border-top:3px dashed currentColor}
+
+#tip{position:fixed;pointer-events:none;background:rgba(26,29,36,.94);color:#fff;padding:8px 11px;border-radius:6px;font-size:12px;line-height:1.6;opacity:0;transition:opacity .1s;z-index:99;white-space:nowrap;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+#tip b{font-variant-numeric:tabular-nums}
+
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden;font-size:13px}
+th{background:var(--band);text-align:left;padding:10px 12px;font-weight:600;color:var(--ink2);border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--line2);font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:#fafbfd}
+td.num{text-align:right}
+.red{color:var(--up);font-weight:600}
+.green{color:var(--down);font-weight:600}
+
+.note{background:#fffdf5;border:1px solid #f0e2bd;border-radius:8px;padding:14px 18px;margin-top:14px;font-size:12.5px;color:var(--ink2)}
+.note b{color:var(--ink)}
+.note ul{margin:8px 0 0 18px}
+.note li{margin-bottom:5px}
+.insight{background:#f0f4fc;border:1px solid #d3def5;border-radius:8px;padding:16px 20px;margin-top:14px}
+.insight h3{font-size:14px;margin-bottom:8px;color:var(--accent)}
+.insight ul{margin-left:18px;font-size:13.5px;color:var(--ink2)}
+.insight li{margin-bottom:8px}
+.insight b{color:var(--ink)}
+footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-size:11.5px;color:var(--ink3);line-height:1.8}
+@media(max-width:600px){
+  body{padding:18px 10px 36px;font-size:13px}
+  h1{font-size:21px;line-height:1.35}
+  h2{font-size:16px;margin-top:28px;padding-left:8px}
+  h2 .en{display:block;margin-left:0}
+  .lead{padding-left:0}
+  .cards{grid-template-columns:minmax(0,1fr)}
+  .card{padding:14px 12px}
+  .card .nm small{display:block;margin-left:0}
+  .bigrow{gap:8px;flex-wrap:wrap}
+  .bigv{font-size:30px}
+  .gaugelbl{font-size:9px}
+  .chartbox{padding:10px 8px 6px}
+  .ctrls{gap:4px}
+  .btn{padding:4px 8px}
+  #anchor-tables{max-width:100%;overflow-x:auto}
+  #anchor-tables table{min-width:660px}
+  .note,.insight{padding:12px 13px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>A 股 PE-TTM 历史分位图：万得全A &amp; 沪深300</h1>
+  <div class="sub">近 20 年（2006-01 ~ 2026-08）滚动市盈率走势、20%/80% 分位参考线与当前位置标定</div>
+  <div class="meta">
+    <span class="tag">生成时间：2026-09-02</span>
+    <span class="tag">万得全A 样本 4,994 交易日</span>
+    <span class="tag">沪深300 样本 3,637 交易日</span>
+    <span class="tag hot">万得全A 当前分位 78.0%</span>
+  </div>
+</header>
+
+<h2>一、当前位置速览<span class="en">Where are we now</span></h2>
+<div class="lead">分位 = 当前 PE 在各自历史样本中的百分位排名。20% 线以下为低估区（绿），80% 线以上为高估区（红）。</div>
+<div class="cards" id="cards"></div>
+
+<h2>二、万得全A · PE-TTM 近 20 年走势<span class="en">Wind All-A index</span></h2>
+<div class="lead">口径：申万A指（覆盖全部 A 股，与万得全A 成分高度重合）日频滚动市盈率，2006-01-04 ~ 2026-08-31。</div>
+<div class="chartbox">
+  <div class="ctrls" id="ctrl-swa">
+    <span class="lb">时间</span>
+    <button class="btn on" data-span="0">近20年</button>
+    <button class="btn" data-span="10">近10年</button>
+    <button class="btn" data-span="5">近5年</button>
+    <span class="lb" style="margin-left:12px">纵轴</span>
+    <button class="btn on" data-log="0">线性</button>
+    <button class="btn" data-log="1">对数</button>
+    <span class="lb" style="margin-left:12px">锚点</span>
+    <button class="btn on" data-anchor="1">显示</button>
+    <button class="btn" data-anchor="0">隐藏</button>
+  </div>
+  <div id="chart-swa"></div>
+  <div class="legend">
+    <span><i style="background:#2b5cd9"></i>PE-TTM</span>
+    <span style="color:#d03a2c"><i class="dash"></i>80% 分位线（高估门槛）</span>
+    <span style="color:#8a93a3"><i class="dash"></i>50% 中位线</span>
+    <span style="color:#128a5b"><i class="dash"></i>20% 分位线（低估门槛）</span>
+    <span><i style="background:#d03a2c;border-radius:50%;width:9px;height:9px"></i>历史锚点</span>
+  </div>
+</div>
+
+<h2>三、沪深300 · PE-TTM 走势<span class="en">CSI 300</span></h2>
+<div class="lead">口径：中证指数官网官方 PE-TTM 序列，起始 2011-06-28（中证官网该字段最早发布日），至 2026-09-01。</div>
+<div class="chartbox">
+  <div class="ctrls" id="ctrl-hs300">
+    <span class="lb">时间</span>
+    <button class="btn on" data-span="0">全区间</button>
+    <button class="btn" data-span="10">近10年</button>
+    <button class="btn" data-span="5">近5年</button>
+    <span class="lb" style="margin-left:12px">纵轴</span>
+    <button class="btn on" data-log="0">线性</button>
+    <button class="btn" data-log="1">对数</button>
+  </div>
+  <div id="chart-hs300"></div>
+  <div class="legend">
+    <span><i style="background:#2b5cd9"></i>PE-TTM</span>
+    <span style="color:#d03a2c"><i class="dash"></i>80% 分位线</span>
+    <span style="color:#8a93a3"><i class="dash"></i>50% 中位线</span>
+    <span style="color:#128a5b"><i class="dash"></i>20% 分位线</span>
+  </div>
+</div>
+
+<h2>四、滚动 10 年分位曲线<span class="en">Rolling 10Y percentile</span></h2>
+<div class="lead">每个时点的 PE 在过去 10 年（2,430 交易日）窗口内的百分位。相比全样本分位，滚动分位对"当前是否过热"的刻画更及时。</div>
+<div class="chartbox">
+  <div id="chart-pct"></div>
+  <div class="legend">
+    <span><i style="background:#d03a2c"></i>万得全A（申万A指口径）</span>
+    <span><i style="background:#2b5cd9"></i>沪深300（中证官方口径）</span>
+    <span style="color:#d03a2c"><i class="dash"></i>80% 过热线</span>
+    <span style="color:#128a5b"><i class="dash"></i>20% 冰点线</span>
+  </div>
+</div>
+
+<h2>五、PE 分布直方图 · 万得全A<span class="en">Distribution</span></h2>
+<div class="lead">近 20 年全部交易日的 PE 取值分布，红色柱为当前 PE 所处区间。</div>
+<div class="chartbox"><div id="chart-hist"></div></div>
+
+<h2>六、关键历史锚点对照<span class="en">Historical anchors</span></h2>
+<div class="lead">市场公认的估值极值区间，用于校准分位读数的直觉。</div>
+<div id="anchor-tables"></div>
+
+<h2>七、读数与含义</h2>
+<div class="insight" id="insight"></div>
+
+<div class="note">
+  <b>数据口径与限制说明</b>
+  <ul>
+    <li><b>万得全A</b>：万得全A 指数（881001.WI）为商用数据，无公开免费的历史 PE 日频接口。此处采用<b>申万A指（801003）</b>作为代理 —— 同样覆盖全部 A 股、同样为整体法滚动市盈率，2026-08-31 读数 23.41，与全A口径的 Wind 值 20.67 同量级。序列自 2006-01-04 起完整覆盖 20.7 年。</li>
+    <li><b>沪深300 / 中证全指</b>：采用中证指数官网官方 PE-TTM 字段。该字段官网最早发布日为 <b>2011-06-28</b>，故这两条序列为 15.2 年而非 20 年。</li>
+    <li><b>口径不可直接横向比较</b>：申万A指（整体法含亏损）与中证官方口径（成分股筛选与剔除规则不同）绝对值存在差异。分位数在同一序列内部计算，横向比较时应看<b>分位</b>而非绝对 PE。</li>
+    <li><b>交叉校验</b>：2026-08-31/09-01 各口径读数 —— 申万A指 23.41 / 中证全指（官网 xls 市盈率1）19.88 / 沪深300（官网 xls 市盈率1）15.04 / 全A（Wind 口径，来自 westock）20.67。</li>
+    <li><b>采图降采样</b>：图表按周取最后一个交易日绘制（约 1,000 点），分位统计与极值判定均基于全量日频数据计算，不受降采样影响。</li>
+  </ul>
+</div>
+
+<footer>
+  数据来源：中证指数官网（csindex.com.cn）指数估值序列、申万宏源指数发布系统（swsresearch.com）市场表征指数日报。图表由本地脚本计算渲染，无外部依赖。<br>
+  本内容基于公开数据与量化分析，仅供参考，不构成投资建议。市场有风险，投资需谨慎。任何投资决策应结合个人风险承受能力、资金状况和投资目标独立判断，必要时咨询持牌专业机构。过往表现不预示未来收益。
+</footer>
+
+</div>
+<div id="tip"></div>
+
+<script>
+const DATA = /*__DATA__*/;
+
+/* ---------- 工具 ---------- */
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, text){
+  const n = document.createElementNS(NS, tag);
+  for(const k in attrs) n.setAttribute(k, attrs[k]);
+  if(text !== undefined) n.textContent = text;
+  return n;
+}
+function fmtDate(ts){
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2,"0");
+  return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate());
+}
+function fmtY(ts){
+  const d = new Date(ts);
+  return d.getFullYear() + "/" + String(d.getMonth()+1).padStart(2,"0");
+}
+function percentRank(sortedArr, v){
+  let lo = 0, hi = sortedArr.length;
+  while(lo < hi){
+    const mid = (lo + hi) >> 1;
+    if(sortedArr[mid] < v) lo = mid + 1; else hi = mid;
+  }
+  return lo / sortedArr.length * 100;
+}
+
+/* ---------- 折线图 ---------- */
+function lineChart(mountId, cfg){
+  const host = document.getElementById(mountId);
+  host.innerHTML = "";
+  const W = 1200, H = cfg.height || 440;
+  const P = {t:22, r:26, b:44, l:64};
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+
+  let pts = cfg.data.slice();
+  if(cfg.span){
+    const cut = Date.now() - cfg.span * 365.25 * 864e5;
+    const f = pts.filter(p => p[0] >= cut);
+    if(f.length > 30) pts = f;
+  }
+  const valsAll = cfg.data.map(d => d[1]);
+  const sortedAll = valsAll.slice().sort((a,b)=>a-b);
+  const vals = pts.map(d => d[1]);
+  let lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  // 参考线纳入取值范围
+  (cfg.refs || []).forEach(r => { if(r.v < lo) lo = r.v; if(r.v > hi) hi = r.v; });
+
+  const useLog = !!cfg.log;
+  let ymin, ymax;
+  if(useLog){
+    ymin = lo * 0.94; ymax = hi * 1.06;
+  } else {
+    const pad = (hi - lo) * 0.06 || hi * 0.05;
+    ymin = Math.max(0, lo - pad); ymax = hi + pad;
+  }
+
+  const x0 = pts[0][0], x1 = pts[pts.length-1][0];
+  const sx = t => P.l + (t - x0) / (x1 - x0) * iw;
+  const sy = v => useLog
+    ? P.t + ih * (Math.log(ymax) - Math.log(Math.max(v, 1e-6))) / (Math.log(ymax) - Math.log(ymin))
+    : P.t + ih * (ymax - v) / (ymax - ymin);
+
+  const svg = el("svg", {viewBox:"0 0 "+W+" "+H, role:"img"});
+
+  // 背景：20% 以下低估带 / 80% 以上高估带
+  const r20 = (cfg.refs||[]).find(r=>r.key==="q20");
+  const r80 = (cfg.refs||[]).find(r=>r.key==="q80");
+  if(r20) svg.appendChild(el("rect", {x:P.l, y:sy(r20.v), width:iw, height:P.t+ih-sy(r20.v), fill:"#e6f5ee", opacity:.55}));
+  if(r80) svg.appendChild(el("rect", {x:P.l, y:P.t, width:iw, height:Math.max(0,sy(r80.v)-P.t), fill:"#fdeceb", opacity:.55}));
+
+  // Y 轴刻度
+  const ticks = useLog ? logTicks(ymin, ymax) : linTicks(ymin, ymax);
+  ticks.forEach(t => {
+    const y = sy(t);
+    if(y < P.t - 1 || y > P.t + ih + 1) return;
+    svg.appendChild(el("line", {x1:P.l, y1:y, x2:P.l+iw, y2:y, stroke:"#eef0f4", "stroke-width":1}));
+    svg.appendChild(el("text", {x:P.l-9, y:y+4, "text-anchor":"end", "font-size":11, fill:"#7b8494"}, String(t)));
+  });
+
+  // X 轴刻度（按年份）
+  const years = [];
+  for(let y = new Date(x0).getFullYear(); y <= new Date(x1).getFullYear(); y++){
+    const ts = new Date(y, 0, 1).getTime();
+    if(ts >= x0 && ts <= x1) years.push(ts);
+  }
+  const step = Math.ceil(years.length / 13);
+  years.forEach((ts, i) => {
+    if(i % step !== 0) return;
+    svg.appendChild(el("text", {x:sx(ts), y:P.t+ih+20, "text-anchor":"middle", "font-size":11, fill:"#7b8494"}, String(new Date(ts).getFullYear())));
+  });
+
+  // 参考线
+  (cfg.refs || []).forEach(r => {
+    const y = sy(r.v);
+    svg.appendChild(el("line", {x1:P.l, y1:y, x2:P.l+iw, y2:y, stroke:r.color, "stroke-width":1.4, "stroke-dasharray":"7 5"}));
+    svg.appendChild(el("text", {x:P.l+iw-4, y:y-6, "text-anchor":"end", "font-size":11.5, fill:r.color, "font-weight":600},
+      r.label + "  " + r.v));
+  });
+
+  // 主折线
+  const d = pts.map((p,i) => (i?"L":"M") + sx(p[0]).toFixed(1) + " " + sy(p[1]).toFixed(1)).join(" ");
+  svg.appendChild(el("path", {d:d, fill:"none", stroke:"#2b5cd9", "stroke-width":1.6, "stroke-linejoin":"round"}));
+
+  // 锚点
+  if(cfg.anchors && cfg.showAnchors){
+    cfg.anchors.forEach(a => {
+      const ts = new Date(a.date).getTime();
+      if(ts < x0 || ts > x1) return;
+      const x = sx(ts), y = sy(a.pe);
+      svg.appendChild(el("circle", {cx:x, cy:y, r:3.6, fill:"#d03a2c", stroke:"#fff", "stroke-width":1.4}));
+      const above = a.pe > (ymin + ymax) / 2 || a.flip;
+      svg.appendChild(el("text", {x:x + (a.dx||0), y:above ? y - 9 : y + 16,
+        "text-anchor": a.anchor || "middle", "font-size":10.5, fill:"#b0342a"}, a.name));
+    });
+  }
+
+  // 当前点
+  const last = pts[pts.length-1];
+  const lx = sx(last[0]), ly = sy(last[1]);
+  svg.appendChild(el("circle", {cx:lx, cy:ly, r:5, fill:"#d03a2c", stroke:"#fff", "stroke-width":2}));
+  svg.appendChild(el("text", {x:lx-8, y:ly+4, "text-anchor":"end", "font-size":12.5, fill:"#d03a2c", "font-weight":700},
+    "当前 " + last[1]));
+
+  // 坐标轴框
+  svg.appendChild(el("line", {x1:P.l, y1:P.t, x2:P.l, y2:P.t+ih, stroke:"#d8dce4", "stroke-width":1}));
+  svg.appendChild(el("line", {x1:P.l, y1:P.t+ih, x2:P.l+iw, y2:P.t+ih, stroke:"#d8dce4", "stroke-width":1}));
+
+  // hover 层
+  const hl = el("line", {x1:0, y1:P.t, x2:0, y2:P.t+ih, stroke:"#1a1d24", "stroke-width":1, opacity:0});
+  const hd = el("circle", {cx:0, cy:0, r:4, fill:"#1a1d24", opacity:0});
+  svg.appendChild(hl); svg.appendChild(hd);
+  const hit = el("rect", {x:P.l, y:P.t, width:iw, height:ih, fill:"transparent"});
+  svg.appendChild(hit);
+  host.appendChild(svg);
+
+  const tip = document.getElementById("tip");
+  hit.addEventListener("mousemove", ev => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) / r.width * W;
+    const t = x0 + (px - P.l) / iw * (x1 - x0);
+    let idx = 0, best = Infinity;
+    for(let i=0;i<pts.length;i++){ const dd = Math.abs(pts[i][0]-t); if(dd<best){best=dd;idx=i;} }
+    const p = pts[idx];
+    hl.setAttribute("x1", sx(p[0])); hl.setAttribute("x2", sx(p[0])); hl.setAttribute("opacity", .35);
+    hd.setAttribute("cx", sx(p[0])); hd.setAttribute("cy", sy(p[1])); hd.setAttribute("opacity", 1);
+    const pct = percentRank(sortedAll, p[1]);
+    tip.innerHTML = "<b>" + fmtDate(p[0]) + "</b>　PE-TTM <b>" + p[1].toFixed(2) + "</b>　全样本分位 <b>" + pct.toFixed(1) + "%</b>";
+    tip.style.opacity = 1;
+    tip.style.left = Math.min(ev.clientX + 14, window.innerWidth - 240) + "px";
+    tip.style.top = (ev.clientY - 46) + "px";
+  });
+  hit.addEventListener("mouseleave", () => {
+    tip.style.opacity = 0; hl.setAttribute("opacity", 0); hd.setAttribute("opacity", 0);
+  });
+}
+
+function linTicks(lo, hi){
+  const span = hi - lo, raw = span / 6;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / mag;
+  const step = (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+  const out = [];
+  for(let v = Math.ceil(lo/step)*step; v <= hi; v += step) out.push(+v.toFixed(step < 1 ? 1 : 0));
+  return out;
+}
+function logTicks(lo, hi){
+  const out = [];
+  for(let e = -1; e <= 3; e++){
+    [1,2,3,5,7].forEach(m => {
+      const v = m * Math.pow(10, e);
+      if(v >= lo && v <= hi) out.push(v);
+    });
+  }
+  return out.length ? out : linTicks(lo, hi);
+}
+
+/* ---------- 分位曲线 ---------- */
+function pctChart(mountId){
+  const host = document.getElementById(mountId);
+  host.innerHTML = "";
+  const W = 1200, H = 380, P = {t:20, r:26, b:44, l:64};
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const a = DATA.series.swa.rolling10y, b = DATA.series.hs300.rolling10y;
+  const x0 = Math.max(a[0][0], b[0][0]);
+  const x1 = Math.min(a[a.length-1][0], b[b.length-1][0]);
+  const sx = t => P.l + (t - x0) / (x1 - x0) * iw;
+  const sy = v => P.t + ih * (100 - v) / 100;
+  const svg = el("svg", {viewBox:"0 0 "+W+" "+H});
+
+  svg.appendChild(el("rect", {x:P.l, y:P.t, width:iw, height:ih*0.2, fill:"#fdeceb", opacity:.6}));
+  svg.appendChild(el("rect", {x:P.l, y:sy(20), width:iw, height:ih*0.2, fill:"#e6f5ee", opacity:.6}));
+
+  [0,20,40,60,80,100].forEach(v => {
+    const y = sy(v);
+    svg.appendChild(el("line", {x1:P.l, y1:y, x2:P.l+iw, y2:y, stroke: v===20||v===80 ? "#ccd2dc" : "#eef0f4", "stroke-width":1}));
+    svg.appendChild(el("text", {x:P.l-9, y:y+4, "text-anchor":"end", "font-size":11, fill:"#7b8494"}, v+"%"));
+  });
+  [[80,"80% 过热线","#d03a2c"],[20,"20% 冰点线","#128a5b"]].forEach(r => {
+    const y = sy(r[0]);
+    svg.appendChild(el("line", {x1:P.l, y1:y, x2:P.l+iw, y2:y, stroke:r[2], "stroke-width":1.4, "stroke-dasharray":"7 5"}));
+  });
+
+  for(let y = new Date(x0).getFullYear(); y <= new Date(x1).getFullYear(); y++){
+    const ts = new Date(y,0,1).getTime();
+    if(ts < x0 || ts > x1) continue;
+    if((y - new Date(x0).getFullYear()) % 2 !== 0) continue;
+    svg.appendChild(el("text", {x:sx(ts), y:P.t+ih+20, "text-anchor":"middle", "font-size":11, fill:"#7b8494"}, String(y)));
+  }
+
+  function draw(arr, color, name){
+    const pts = arr.filter(p => p[0] >= x0 && p[0] <= x1);
+    const d = pts.map((p,i) => (i?"L":"M") + sx(p[0]).toFixed(1) + " " + sy(p[1]).toFixed(1)).join(" ");
+    svg.appendChild(el("path", {d:d, fill:"none", stroke:color, "stroke-width":1.7, "stroke-linejoin":"round"}));
+    const last = pts[pts.length-1];
+    svg.appendChild(el("circle", {cx:sx(last[0]), cy:sy(last[1]), r:4.5, fill:color, stroke:"#fff", "stroke-width":1.6}));
+    svg.appendChild(el("text", {x:sx(last[0])+8, y:sy(last[1])+4, "font-size":12, fill:color, "font-weight":700},
+      name + " " + last[1].toFixed(1) + "%"));
+  }
+  draw(b, "#2b5cd9", "沪深300");
+  draw(a, "#d03a2c", "万得全A");
+
+  svg.appendChild(el("line", {x1:P.l, y1:P.t, x2:P.l, y2:P.t+ih, stroke:"#d8dce4", "stroke-width":1}));
+  host.appendChild(svg);
+}
+
+/* ---------- 直方图 ---------- */
+function histChart(mountId){
+  const host = document.getElementById(mountId);
+  host.innerHTML = "";
+  const W = 1200, H = 320, P = {t:18, r:26, b:44, l:64};
+  const iw = W - P.l - P.r, ih = H - P.t - P.b;
+  const h = DATA.series.swa.hist, st = DATA.series.swa.stats;
+  const xmin = h[0].x0, xmax = h[h.length-1].x1;
+  const nmax = Math.max.apply(null, h.map(d=>d.n));
+  const sx = v => P.l + (v - xmin) / (xmax - xmin) * iw;
+  const sy = n => P.t + ih * (1 - n / nmax);
+  const svg = el("svg", {viewBox:"0 0 "+W+" "+H});
+
+  [0, .25, .5, .75, 1].forEach(f => {
+    const y = sy(nmax * f);
+    svg.appendChild(el("line", {x1:P.l, y1:y, x2:P.l+iw, y2:y, stroke:"#eef0f4", "stroke-width":1}));
+    svg.appendChild(el("text", {x:P.l-9, y:y+4, "text-anchor":"end", "font-size":11, fill:"#7b8494"}, String(Math.round(nmax*f))));
+  });
+
+  h.forEach(bin => {
+    const cur = st.current >= bin.x0 && st.current < bin.x1;
+    const w = Math.max(1, sx(bin.x1) - sx(bin.x0) - 1);
+    const y = sy(bin.n);
+    svg.appendChild(el("rect", {x:sx(bin.x0)+.5, y:y, width:w, height:P.t+ih-y,
+      fill: cur ? "#d03a2c" : (bin.x1 <= st.q20 ? "#69b98f" : bin.x0 >= st.q80 ? "#e08a7a" : "#9fb4e8")}));
+  });
+
+  [[st.q20,"20% 线","#128a5b"],[st.median,"中位","#8a93a3"],[st.q80,"80% 线","#d03a2c"],[st.current,"当前 "+st.current,"#d03a2c"]].forEach(r => {
+    const x = sx(r[0]);
+    svg.appendChild(el("line", {x1:x, y1:P.t, x2:x, y2:P.t+ih, stroke:r[2], "stroke-width":1.4, "stroke-dasharray":"5 4"}));
+    svg.appendChild(el("text", {x:x+4, y:P.t+12, "font-size":11, fill:r[2], "font-weight":600}, r[1]));
+  });
+
+  for(let v = Math.ceil(xmin/5)*5; v <= xmax; v += 5){
+    svg.appendChild(el("text", {x:sx(v), y:P.t+ih+20, "text-anchor":"middle", "font-size":11, fill:"#7b8494"}, String(v)));
+  }
+  svg.appendChild(el("text", {x:P.l+iw, y:P.t+ih+38, "text-anchor":"end", "font-size":11, fill:"#7b8494"}, "PE-TTM（倍）"));
+  svg.appendChild(el("line", {x1:P.l, y1:P.t+ih, x2:P.l+iw, y2:P.t+ih, stroke:"#d8dce4", "stroke-width":1}));
+  host.appendChild(svg);
+}
+
+/* ---------- 卡片 ---------- */
+function pctClass(p){ return p < 20 ? "p-low" : p < 60 ? "p-mid" : p < 80 ? "p-mid" : "p-high"; }
+function pctWord(p){ return p < 20 ? "低估" : p < 40 ? "偏低" : p < 60 ? "中性" : p < 80 ? "偏高" : "高估"; }
+
+function renderCards(){
+  const host = document.getElementById("cards");
+  const order = [["swa","万得全A","申万A指口径 · 20.7年"], ["csi985","中证全指","中证官方口径 · 15.2年"], ["hs300","沪深300","中证官方口径 · 15.2年"]];
+  host.innerHTML = order.map(o => {
+    const s = DATA.series[o[0]].stats;
+    const to80 = ((s.q80 / s.current - 1) * 100);
+    return '<div class="card">' +
+      '<div class="ttl">' + o[1] + '</div>' +
+      '<div class="nm">' + o[2] + ' <small>' + s.start + ' ~ ' + s.end + '</small></div>' +
+      '<div class="bigrow"><div class="bigv">' + s.current + '</div>' +
+      '<div class="pctchip ' + pctClass(s.pct) + '">分位 ' + s.pct + '% · ' + pctWord(s.pct) + '</div></div>' +
+      '<div class="gauge"><div class="pin" style="left:' + s.pct.toFixed(1) + '%"></div></div>' +
+      '<div class="gaugelbl"><span>0% 极冷</span><span>20% 低估</span><span>50%</span><span>80% 高估</span><span>100% 极热</span></div>' +
+      '<div class="kv">' +
+        '<div><span>20% 线</span><span class="green">' + s.q20 + '</span></div>' +
+        '<div><span>80% 线</span><span class="red">' + s.q80 + '</span></div>' +
+        '<div><span>中位数</span><span>' + s.median + '</span></div>' +
+        '<div><span>距 80% 线</span><span class="' + (to80 > 0 ? "green" : "red") + '">' + (to80 > 0 ? "+" : "") + to80.toFixed(1) + '%</span></div>' +
+        '<div><span>历史最低</span><span>' + s.min + '</span></div>' +
+        '<div><span>历史最高</span><span>' + s.max + '</span></div>' +
+      '</div></div>';
+  }).join("");
+}
+
+/* ---------- 锚点表 ---------- */
+function renderAnchors(){
+  const host = document.getElementById("anchor-tables");
+  let html = '<table><thead><tr><th>历史时点</th><th class="num">万得全A PE</th><th class="num">中证全指 PE</th><th class="num">沪深300 PE</th></tr></thead><tbody>';
+  const A = DATA.series.swa.anchors, B = DATA.series.csi985.anchors, C = DATA.series.hs300.anchors;
+  const mapB = {}, mapC = {};
+  B.forEach(x => mapB[x.name] = x.pe);
+  C.forEach(x => mapC[x.name] = x.pe);
+  A.forEach(a => {
+    html += '<tr><td>' + a.date + '　<span style="color:#7b8494">' + a.name + '</span></td>' +
+      '<td class="num"><b>' + a.pe + '</b></td>' +
+      '<td class="num">' + (mapB[a.name] !== undefined ? mapB[a.name] : "—") + '</td>' +
+      '<td class="num">' + (mapC[a.name] !== undefined ? mapC[a.name] : "—") + '</td></tr>';
+  });
+  html += '</tbody></table>';
+  host.innerHTML = html;
+}
+
+/* ---------- 洞察 ---------- */
+function renderInsight(){
+  const a = DATA.series.swa.stats, c = DATA.series.hs300.stats;
+  const gap = (a.q80 - a.current).toFixed(2);
+  document.getElementById("insight").innerHTML =
+    "<h3>三个关键读数</h3><ul>" +
+    "<li><b>万得全A 已在 80% 分位门口。</b>当前 PE-TTM " + a.current + "，20 年分位 <b>" + a.pct + "%</b>，距 80% 高估线（" + a.q80 + "）仅剩 <b>" + gap + " 倍</b> —— 对应指数再涨约 " + ((a.q80/a.current-1)*100).toFixed(1) + "%（在盈利不变假设下）。20% 低估线在 " + a.q20 + "，意味着若回到低估区需下跌约 " + ((1-a.q20/a.current)*100).toFixed(1) + "%。</li>" +
+    "<li><b>沪深300 分位 " + c.pct + "%，明显低于全A 的 " + a.pct + "%。</b>两者相差 " + (a.pct - c.pct).toFixed(1) + " 个百分点，这是一个<b>结构性信号</b>：估值压力集中在中小盘与题材股，大盘蓝筹的相对位置并没有到极端。这也意味着如果市场调整，杀估值的主要承压方不是沪深300 权重股。</li>" +
+    "<li><b>历史极值提供了尺度感。</b>万得全A 的历史顶部是 2007 年的 " + a.max + " 倍（" + a.maxDate + "），历史底部是 2008 年 11 月的 " + a.min + " 倍 —— 与公认的 2007 年 50~70 倍顶部、2008 年 11 月 13 倍底部完全吻合，说明这条序列口径可靠。当前 " + a.current + " 倍处于 20 年样本的前 22% 高位区间，但距离泡沫顶点还有极大空间：这更像「盈利没跟上、靠低利率把估值推上去」的贵，而不是 2007 式的杠杆疯狂。</li>" +
+    "</ul>";
+}
+
+/* ---------- 控制 ---------- */
+function bind(ctrlId, cfgFn){
+  const box = document.getElementById(ctrlId);
+  const st = {span:0, log:0, anchor:1};
+  box.addEventListener("click", ev => {
+    const b = ev.target.closest("button");
+    if(!b) return;
+    if(b.dataset.span !== undefined) st.span = +b.dataset.span;
+    if(b.dataset.log !== undefined) st.log = +b.dataset.log;
+    if(b.dataset.anchor !== undefined) st.anchor = +b.dataset.anchor;
+    box.querySelectorAll("button").forEach(x => {
+      const k = x.dataset.span !== undefined ? "span" : x.dataset.log !== undefined ? "log" : "anchor";
+      x.classList.toggle("on", st[k] === +x.dataset[k]);
+    });
+    cfgFn(st);
+  });
+}
+
+/* ---------- 锚点文字避让（人工微调） ---------- */
+function tuneAnchors(list){
+  const fix = {
+    "2007年10月 牛市顶": {dx:0, flip:true},
+    "2008年11月 金融危机底": {dx:0, flip:true},
+    "2012年12月 1949点底": {dx:0, flip:true},
+    "2015年6月 杠杆牛顶": {dx:-6, flip:true, anchor:"end"},
+    "2018年12月 去杠杆底": {dx:0, flip:true},
+    "2021年2月 核心资产顶": {dx:0, flip:true},
+    "2024年2月 流动性底": {dx:0, flip:true},
+    "2014年5月 十年最低估值": {dx:0, flip:false},
+    "2016年1月 熔断底": {dx:0, flip:false},
+    "2022年10月 疫情底": {dx:0, flip:true},
+    "2024年9月 政策底反转": {dx:0, flip:true},
+    "2010年7月 中期底部": {dx:0, flip:false},
+  };
+  return list.map(a => Object.assign({}, a, fix[a.name] || {}));
+}
+
+function refsOf(s){
+  const st = s.stats;
+  return [
+    {key:"q80", v:st.q80, color:"#d03a2c", label:"80%"},
+    {key:"med", v:st.median, color:"#8a93a3", label:"中位数"},
+    {key:"q20", v:st.q20, color:"#128a5b", label:"20%"},
+  ];
+}
+
+/* ---------- 启动 ---------- */
+renderCards();
+renderAnchors();
+renderInsight();
+pctChart("chart-pct");
+histChart("chart-hist");
+
+const cfgSWA = st => lineChart("chart-swa", {
+  data: DATA.series.swa.data, refs: refsOf(DATA.series.swa), span: st.span, log: st.log,
+  anchors: tuneAnchors(DATA.series.swa.anchors), showAnchors: !!st.anchor, height: 460
+});
+const cfgHS = st => lineChart("chart-hs300", {
+  data: DATA.series.hs300.data, refs: refsOf(DATA.series.hs300), span: st.span, log: st.log, height: 420
+});
+bind("ctrl-swa", cfgSWA);
+bind("ctrl-hs300", cfgHS);
+cfgSWA({span:0, log:0, anchor:1});
+cfgHS({span:0, log:0});
+</script>
+</body>
+</html>
