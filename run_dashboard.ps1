@@ -45,8 +45,10 @@ $startupFailureSignal = Join-Path $PSScriptRoot ".dashboard_startup_failed"
 $dashboardPort = 8765
 $dashboardBaseUrl = "http://127.0.0.1:$dashboardPort/"
 $dashboardUrl = "${dashboardBaseUrl}#watchlist"
+$dashboardOpenedSignal = Join-Path $PSScriptRoot ".dashboard_opened"
 
 Remove-Item -LiteralPath $startupFailureSignal -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $dashboardOpenedSignal -Force -ErrorAction SilentlyContinue
 
 function Stop-StaleDashboardPythonProcesses {
     param(
@@ -130,6 +132,8 @@ $initialRefreshArguments += "--output"
 $initialRefreshArguments += $intradayOutput
 $initialRefreshArguments += "--dashboard-output"
 $initialRefreshArguments += $dashboardPath
+$initialRefreshArguments += "--workers"
+$initialRefreshArguments += "16"
 & $pythonCommand.Source @initialRefreshArguments
 if ($LASTEXITCODE -ne 0) {
     Set-Content -LiteralPath $startupFailureSignal -Value (Get-Date).ToString("o")
@@ -204,8 +208,29 @@ try {
         throw "Local dashboard server did not start on $dashboardBaseUrl"
     }
 
+    $chromeLauncherScript = Join-Path $PSScriptRoot "open_dashboard_chrome.ps1"
+    $opened = $false
+    for ($i = 0; $i -lt 15; $i++) {
+        if (Test-Path -LiteralPath $dashboardOpenedSignal) {
+            $opened = $true
+            break
+        }
+        Start-Sleep -Milliseconds 200
+    }
+    if (-not $opened -and (Test-Path -LiteralPath $chromeLauncherScript)) {
+        try {
+            & "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
+                -NoLogo -NoProfile -ExecutionPolicy Bypass `
+                -File $chromeLauncherScript -BaseUrl $dashboardBaseUrl
+            Set-Content -LiteralPath $dashboardOpenedSignal -Value (Get-Date).ToString("o")
+        }
+        catch {
+            # 浏览器调起失败不阻断服务主循环
+        }
+    }
+
     Write-Host ""
-    Write-Host "The dashboard is ready; the independent Chrome opener is handling the new tab." -ForegroundColor Green
+    Write-Host "The dashboard is ready; the browser opener is handling the new tab." -ForegroundColor Green
     Write-Host "The opened page is based on the latest intraday snapshot."
     Write-Host "The watchlist supports code/name/pinyin/English search across A/HK/US/KR."
     Write-Host "New additions fetch quotes immediately; no dashboard restart is needed."

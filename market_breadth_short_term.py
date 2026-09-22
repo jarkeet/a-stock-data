@@ -41,8 +41,28 @@ _THREAD_LOCAL = threading.local()
 def _session() -> requests.Session:
     """每个工作线程复用自己的连接，降低代理握手和并发失败率。"""
     if not hasattr(_THREAD_LOCAL, "session"):
-        _THREAD_LOCAL.session = requests.Session()
-        _THREAD_LOCAL.session.headers.update(HEADERS)
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        try:
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
+            adapter = HTTPAdapter(
+                max_retries=Retry(
+                    total=3,
+                    connect=3,
+                    read=3,
+                    backoff_factor=0.3,
+                    status_forcelist=[429, 500, 502, 503, 504],
+                    allowed_methods=["GET"],
+                ),
+                pool_connections=16,
+                pool_maxsize=16,
+            )
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+        except Exception:
+            pass
+        _THREAD_LOCAL.session = session
     return _THREAD_LOCAL.session
 
 
@@ -52,13 +72,15 @@ def _chunks(values: list[str], size: int):
 
 
 def _candidate_secids() -> list[str]:
-    """生成沪深 A 股可能使用的代码段，实际上市状态由腾讯批量报价确认。"""
+    """生成沪深北 A 股可能使用的代码段，实际上市状态由腾讯批量报价确认。"""
     ranges = [
         ("sh", 600000, 605999),
         ("sh", 688000, 689999),
         ("sz", 0, 3999),
         # 创业板已开始使用 302xxx；多留代码空间避免新股再次漏入。
         ("sz", 300000, 309999),
+        # 北交所现行 920xxx 号段，直接由腾讯批量报价探测，不依赖单一接口。
+        ("bj", 920000, 920999),
     ]
     return [f"{prefix}{code:06d}" for prefix, first, last in ranges
             for code in range(first, last + 1)]
@@ -68,15 +90,59 @@ def _bse_list() -> list[dict]:
     """分页取得北交所股票清单；仅在刷新股票池时调用，严格串行限流。"""
     records = []
     page = 1
+    session = requests.Session()
+    bse_headers = dict(HEADERS)
+    bse_headers["Referer"] = "https://quote.eastmoney.com/"
+    session.headers.update(bse_headers)
+    try:
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        adapter = HTTPAdapter(
+            max_retries=Retry(
+                total=3,
+                connect=3,
+                read=3,
+                backoff_factor=0.5,
+                status_forcelist=[429, 500, 502, 503, 504],
+                allowed_methods=["GET"],
+            ),
+            pool_connections=4,
+            pool_maxsize=4,
+        )
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+    except Exception:
+        pass
+
+    direct_session = None
+
     while True:
         params = {
             "pn": page, "pz": 100, "po": 1, "np": 1, "fltt": 2, "invt": 2,
             "fid": "f12", "fs": "m:0+t:81+s:2048", "fields": "f12,f14",
         }
-        response = requests.get(
-            BSE_LIST_URL, params=params, headers=HEADERS, timeout=20
-        )
-        response.raise_for_status()
+        last_error = None
+        response = None
+        for attempt in range(3):
+            try:
+                curr_session = direct_session if direct_session is not None else session
+                response = curr_session.get(
+                    BSE_LIST_URL, params=params, timeout=15
+                )
+                response.raise_for_status()
+                break
+            except Exception as exc:
+                last_error = exc
+                if direct_session is None:
+                    direct_session = requests.Session()
+                    direct_session.headers.update(bse_headers)
+                    direct_session.trust_env = False
+                sleep(0.5 * (attempt + 1))
+        else:
+            if records:
+                break
+            raise last_error
+
         data = response.json().get("data") or {}
         rows = data.get("diff") or []
         if isinstance(rows, dict):
@@ -145,9 +211,11 @@ def tencent_a_share_universe(
                 continue
     try:
         records.extend(_bse_list())
-    except (requests.RequestException, ValueError, KeyError) as exc:
-        print(f"[WARN] 北交所股票清单刷新失败: {exc}")
+    except (requests.RequestException, ValueError, KeyError, Exception) as exc:
         records.extend(cached_bse)
+        bj_existing = [r for r in records if str(r.get("secid", "")).startswith("bj")]
+        if not bj_existing:
+            print(f"[WARN] 北交所股票清单刷新失败: {exc}")
     universe = pd.DataFrame(records).drop_duplicates("secid").sort_values("secid")
     if len(universe) < 4000:
         raise RuntimeError(f"腾讯股票池仅识别到 {len(universe)} 只，低于合理下限，停止写入")

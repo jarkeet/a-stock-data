@@ -20,3 +20,5 @@ reports/
 # Generated dashboards and valuation reports
 /a-share-pe-valuation-report.html
 /market_sentiment_dashboard.html
+.dashboard_opened
+.dashboard_startup_failed

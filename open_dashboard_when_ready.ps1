@@ -9,14 +9,20 @@ param(
     [string]$ChromeLauncherPath,
 
     [Parameter(Mandatory = $false)]
-    [string]$FailureSignalPath = ""
+    [string]$FailureSignalPath = "",
+
+    [Parameter(Mandatory = $false)]
+    [int]$TimeoutSeconds = 600,
+
+    [Parameter(Mandatory = $false)]
+    [string]$SuccessSignalPath = ""
 )
 
 $ErrorActionPreference = "Stop"
 $startedAt = Get-Date
 $healthUrl = $BaseUrl.TrimEnd("/") + "/health"
 
-for ($attempt = 0; $attempt -lt 180; $attempt++) {
+for ($attempt = 0; $attempt -lt $TimeoutSeconds; $attempt++) {
     if ($FailureSignalPath -and (Test-Path -LiteralPath $FailureSignalPath) -and
         ((Get-Item -LiteralPath $FailureSignalPath).LastWriteTime -ge $startedAt)) {
         Write-Host "Dashboard startup was cancelled because the initial refresh failed." `
@@ -32,7 +38,11 @@ for ($attempt = 0; $attempt -lt 180; $attempt++) {
                 & "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
                     -NoLogo -NoProfile -ExecutionPolicy Bypass `
                     -File $ChromeLauncherPath -BaseUrl $BaseUrl
-                exit $LASTEXITCODE
+                $exitCode = $LASTEXITCODE
+                if ($exitCode -eq 0 -and $SuccessSignalPath) {
+                    Set-Content -LiteralPath $SuccessSignalPath -Value (Get-Date).ToString("o")
+                }
+                exit $exitCode
             }
         }
         catch {
