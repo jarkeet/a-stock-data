@@ -6,6 +6,7 @@ import html
 import json
 import math
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pandas as pd
 
@@ -652,20 +653,67 @@ def hot_ranking_panel(title, items, kind):
     )
 
 
-def hot_stock_panel(items):
-    """热股榜与浏览器本地自选股共用一个卡片，通过页签切换。"""
+def hot_article_list(items):
+    rows = []
+    for item in items:
+        rank = int(item.get("rank") or 0)
+        stocks = []
+        for stock in item.get("stocks") or []:
+            name = html.escape(str(stock.get("name") or stock.get("code") or ""))
+            code = html.escape(str(stock.get("code") or ""), quote=True)
+            change = stock.get("change_pct")
+            change_html = ""
+            if change is not None and math.isfinite(float(change)):
+                tone = "rise" if change > 0 else "fall" if change < 0 else "tone-neutral"
+                change_html = f' <b class="{tone}">{change:+.2f}%</b>'
+            stocks.append(f'<span class="article-stock" title="{code}">{name}{change_html}</span>')
+        related = "".join(stocks) or '<span class="article-no-stock">暂无关联股票</span>'
+        heat = item.get("heat")
+        heat_text = format_heat(heat) + "热度" if heat is not None else "热度待更新"
+        content = (
+            f'<span class="etf-rank etf-rank-{rank}">{rank}</span>'
+            '<span class="article-main">'
+            f'<span class="article-title">{html.escape(str(item.get("title") or ""))}</span>'
+            f'<span class="article-meta"><span class="article-stocks">{related}</span>'
+            f'<span class="article-heat">{heat_text}</span></span></span>'
+        )
+        url = str(item.get("url") or "").strip()
+        try:
+            parsed = urlsplit(url)
+            valid_url = parsed.scheme in ("https", "http") and bool(parsed.netloc)
+        except ValueError:
+            valid_url = False
+        if valid_url:
+            row = (f'<a class="hot-article-row" href="{html.escape(url, quote=True)}" '
+                   f'target="_blank" rel="noopener noreferrer">{content}</a>')
+        else:
+            row = f'<div class="hot-article-row">{content}<small>原文链接暂不可用</small></div>'
+        rows.append(f"<li>{row}</li>")
+    content = ('<ol class="hot-article-list">' + "".join(rows) + "</ol>" if rows else
+               '<p class="hot-empty">本次刷新未取得热门文章，请等待下次刷新</p>')
+    return ('<div class="etf-list-caption">同花顺用户关注度最高的文章 · 点击打开原文</div>'
+            f'<div class="hot-table-wrap">{content}</div>')
+
+
+def hot_stock_panel(items, articles=None):
+    """热股、自选股和热门文章通过页签切换。"""
+    articles = articles or []
     return (
         '<article class="hot-panel hot-stock-panel">'
         '<div class="hot-panel-head"><h3>股票榜</h3>'
-        '<small>热股 / 自选股</small></div>'
+        '<small>热股 / 自选股 / 热门文章</small></div>'
         '<div class="hot-stock-tabs" role="tablist" aria-label="股票榜分类">'
         '<button type="button" role="tab" data-hot-stock-tab="ranking" '
         f'aria-selected="true">热股榜<small>{len(items)}</small></button>'
         '<button type="button" role="tab" data-hot-stock-tab="watchlist" '
         'aria-selected="false">自选股<small data-watchlist-count>0</small></button>'
+        '<button type="button" role="tab" data-hot-stock-tab="articles" '
+        f'aria-selected="false">热门文章<small>{len(articles)}</small></button>'
         "</div>"
         '<div class="hot-stock-view" data-hot-stock-view="ranking">'
         f'{hot_ranking_table(items, "stock")}</div>'
+        '<div class="hot-stock-view" data-hot-stock-view="articles" hidden>'
+        f'{hot_article_list(articles)}</div>'
         '<div class="hot-stock-view watchlist-view" '
         'data-hot-stock-view="watchlist" hidden>'
         '<form class="watchlist-form" data-watchlist-form>'
@@ -700,11 +748,40 @@ def hot_stock_panel(items):
     )
 
 
-def hot_plate_panel(concepts, industries, indices):
+def hot_etf_list(items):
+    rows = []
+    for item in items[:50]:
+        rank = int(item.get("rank") or 0)
+        change = item.get("change_pct")
+        change_text, tone = "待更新", "tone-missing"
+        if change is not None and not pd.isna(change):
+            change = float(change)
+            change_text = f"{change:+.2f}%"
+            tone = "rise" if change > 0 else ("fall" if change < 0 else "tone-neutral")
+        name = html.escape(str(item.get("name") or ""))
+        tags = "".join(
+            f'<span class="etf-tag{" etf-tag-t0" if tag == "T+0" else ""}">{html.escape(str(tag))}</span>'
+            for tag in item.get("tags") or []
+        )
+        heat = item.get("heat")
+        heat_text = "待更新" if heat is None or pd.isna(heat) else f"{format_heat(heat)}热度"
+        rows.append(
+            f'<li class="hot-etf-row"><b class="etf-rank etf-rank-{rank}">{rank}</b>'
+            f'<strong class="etf-name" title="{name}">{name}</strong>'
+            f'<b class="etf-change {tone}">{change_text}</b>'
+            f'<span class="etf-heat">{heat_text}</span>'
+            f'<div class="etf-meta"><span class="etf-code">{html.escape(str(item.get("code") or ""))}</span>{tags}</div></li>'
+        )
+    content = '<ol class="hot-etf-list">' + "".join(rows) + '</ol>' if rows else '<p class="hot-empty">本次刷新未取得热门ETF数据</p>'
+    return '<div class="etf-list-caption">同花顺 · 24小时热度榜 · 前50名</div><div class="hot-table-wrap">' + content + '</div>'
+
+
+def hot_plate_panel(concepts, industries, indices, etfs=None):
     categories = [
         ("concept", "概念板块", concepts),
         ("industry", "行业板块", industries),
         ("index", "指数板块", indices),
+        ("etf", "热门ETF", etfs or []),
     ]
     tabs = "".join(
         f'<button type="button" role="tab" data-hot-plate-tab="{key}" '
@@ -715,7 +792,7 @@ def hot_plate_panel(concepts, industries, indices):
     views = "".join(
         f'<div class="hot-plate-view" data-hot-plate-view="{key}"'
         f'{" hidden" if index else ""}>'
-        f'{hot_ranking_table(items, "plate")}</div>'
+        f'{hot_etf_list(items) if key == "etf" else hot_ranking_table(items, "plate")}</div>'
         for index, (key, _, items) in enumerate(categories)
     )
     return (
@@ -727,7 +804,30 @@ def hot_plate_panel(concepts, industries, indices):
 
 
 WATCHLIST_CSS = """<style>
-.hot-stock-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:0 12px 12px}
+.etf-list-caption{padding:0 14px 10px;color:#8a96a8;font-size:11px}
+.hot-etf-list{list-style:none;margin:0;padding:0 14px;background:#fff}
+.hot-etf-row{display:grid;grid-template-columns:26px minmax(0,1fr) 76px 100px;column-gap:10px;row-gap:8px;align-items:center;padding:18px 0;border-bottom:1px solid #edf1f6}
+.etf-rank{grid-column:1;grid-row:1;display:grid;place-items:center;width:22px;height:22px;border-radius:3px;color:#a1a1aa;font-size:16px;font-weight:500}
+.etf-rank-1{color:#fff;background:#f5223b}.etf-rank-2{color:#fff;background:#fb9638}.etf-rank-3{color:#fff;background:#f6c34a}
+.etf-name{grid-column:2;grid-row:1;font-size:16px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.etf-change{grid-column:3;grid-row:1;text-align:right;font-size:17px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.etf-heat{grid-column:4;grid-row:1;text-align:right;color:#777;font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.etf-meta{grid-column:2/5;grid-row:2;display:flex;align-items:center;flex-wrap:wrap;gap:5px;font-size:12px;color:#888}
+.etf-code{margin-right:4px;font-variant-numeric:tabular-nums}.etf-tag{padding:1px 5px;border:1px solid #c8c8c8;border-radius:3px;line-height:1.4}.etf-tag-t0{color:#e5484d;border-color:#e7aaad}
+@media(max-width:550px){.hot-etf-list{padding:0 8px}.hot-etf-row{grid-template-columns:22px minmax(0,1fr) 61px 78px;column-gap:5px;padding:15px 0}.etf-name{font-size:14px}.etf-change{font-size:14px}.etf-heat{font-size:10px}.etf-meta{font-size:11px}}
+
+.hot-stock-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:0 12px 12px}
+.hot-article-list{list-style:none;padding:0 16px;margin:0}
+.hot-article-row{display:flex;gap:12px;padding:18px 0;border-bottom:1px solid #edf1f6;color:inherit;text-decoration:none}
+a.hot-article-row:hover{background:#fff7f7}
+a.hot-article-row:focus-visible{outline:2px solid #e5484d;outline-offset:-2px}
+.hot-article-row .etf-rank{flex:0 0 22px;margin-top:3px}
+.article-main{min-width:0;flex:1}.article-title{display:block;font-size:16px;line-height:1.65;overflow-wrap:anywhere}
+.article-meta{display:flex;align-items:flex-end;flex-wrap:wrap;gap:8px;margin-top:9px}
+.article-stocks{display:flex;flex-wrap:wrap;align-content:flex-start;gap:5px;flex:1;min-width:150px;max-height:49px;overflow:hidden}
+.article-stock{padding:2px 6px;border-radius:3px;background:#f5f5f5;color:#777;font-size:12px;line-height:18px;white-space:nowrap}
+.article-heat{margin-left:auto;white-space:nowrap;color:#777;font-size:12px;font-variant-numeric:tabular-nums}
+.article-no-stock{color:#999;font-size:12px}
 .hot-stock-tabs button{appearance:none;border:1px solid #e3e9f1;border-radius:8px;padding:9px 6px;background:#f4f6f9;color:#59677c;font:inherit;font-weight:700;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease}
 .hot-stock-tabs button:hover{border-color:#f0a8ab;background:#fff7f7}
 .hot-stock-tabs button[aria-selected="true"]{border-color:#f3b4b7;background:#fff0f1;color:#d93f45;box-shadow:inset 0 -2px 0 #e5484d}
@@ -824,6 +924,39 @@ WATCHLIST_CSS = """<style>
   .watchlist-action{width:44px;padding-right:4px!important;padding-bottom:7px!important}
 }
 </style>"""
+
+
+DASHBOARD_VIEW_SCRIPT = r"""<script>
+(function(){
+  var storageKey="market-sentiment-dashboard-tabs-v1";
+  var selected={};
+  try{selected=JSON.parse(sessionStorage.getItem(storageKey)||"{}")||{}}catch(error){}
+  ["stock","plate"].forEach(function(group){
+    var panel=document.querySelector(".hot-"+group+"-panel");
+    if(!panel)return;
+    var tabAttr="data-hot-"+group+"-tab";
+    var viewAttr="data-hot-"+group+"-view";
+    var buttons=panel.querySelectorAll("["+tabAttr+"]");
+    var key=selected[group];
+    if(!key&&group==="stock"&&location.hash==="#watchlist")key="watchlist";
+    var active=Array.prototype.find.call(buttons,function(button){
+      return button.getAttribute(tabAttr)===key
+    });
+    if(active){
+      buttons.forEach(function(button){button.setAttribute("aria-selected",String(button===active))});
+      panel.querySelectorAll("["+viewAttr+"]").forEach(function(view){
+        view.hidden=view.getAttribute(viewAttr)!==key
+      })
+    }
+    buttons.forEach(function(button){
+      button.addEventListener("click",function(){
+        selected[group]=button.getAttribute(tabAttr);
+        try{sessionStorage.setItem(storageKey,JSON.stringify(selected))}catch(error){}
+      })
+    })
+  })
+})();
+</script>"""
 
 
 WATCHLIST_SCRIPT = r"""<script>
@@ -1431,10 +1564,7 @@ WATCHLIST_SCRIPT = r"""<script>
   updateSortUI();
   if(location.protocol==="file:"){
     updateCount();render();
-    if(location.hash==="#watchlist"){
-      var fileWatchlistTab=panel.querySelector('[data-hot-stock-tab="watchlist"]');
-      if(fileWatchlistTab)fileWatchlistTab.click()
-    }
+
   }else{
     countNodes.forEach(function(node){node.textContent="0"});
     Array.prototype.forEach.call(form.elements,function(element){element.disabled=true});
@@ -1443,10 +1573,7 @@ WATCHLIST_SCRIPT = r"""<script>
       initialSyncComplete=true;
       Array.prototype.forEach.call(form.elements,function(element){element.disabled=false});
       updateCount();render();
-      if(location.hash==="#watchlist"){
-        var watchlistTab=panel.querySelector('[data-hot-stock-tab="watchlist"]');
-        if(watchlistTab)watchlistTab.click()
-      }else if(items.length){refresh()}
+      if(items.length){refresh()}
     })
   }
   // 整张仪表盘会在下方统一每 60 秒重载；新页面初始化时已会刷新行情。
@@ -1458,7 +1585,15 @@ DASHBOARD_REFRESH_SCRIPT = r"""<script>
 (function(){
   var refreshIntervalMs=60000;
   var scrollStorageKey="market-sentiment-dashboard-scroll-v1";
-  var scrollSelectors=[".hot-table-wrap",".watchlist-table-wrap"];
+  // Identify lists by their view, so hidden tabs can restore when opened later.
+  var scrollSelectors=Array.prototype.map.call(
+    document.querySelectorAll("[data-hot-stock-view],[data-hot-plate-view]"),
+    function(view){
+      var attr=view.hasAttribute("data-hot-stock-view")?"data-hot-stock-view":"data-hot-plate-view";
+      return "["+attr+'="'+view.getAttribute(attr)+'"] .hot-table-wrap'
+    }
+  );
+  var pending=[];
   if("scrollRestoration" in history)history.scrollRestoration="manual";
 
   function saveScrollState(){
@@ -1468,7 +1603,9 @@ DASHBOARD_REFRESH_SCRIPT = r"""<script>
         elements.push({
           selector:selector,index:index,
           top:element.scrollTop,left:element.scrollLeft
-        })
+        });
+        var saved=pending.find(function(item){return item.selector===selector&&item.index===index});
+        if(saved)elements[elements.length-1]=saved;
       })
     });
     try{
@@ -1484,19 +1621,30 @@ DASHBOARD_REFRESH_SCRIPT = r"""<script>
       state=JSON.parse(sessionStorage.getItem(scrollStorageKey)||"null")
     }catch(error){}
     if(!state)return;
+    pending=Array.isArray(state.elements)?state.elements:[];
     var restore=function(){
-      (state.elements||[]).forEach(function(item){
-        var matches=document.querySelectorAll(item.selector);
-        var element=matches[item.index];
-        if(element){
-          element.scrollLeft=Number(item.left)||0;
-          element.scrollTop=Number(item.top)||0
-        }
-      });
-      window.scrollTo(Number(state.x)||0,Number(state.y)||0)
+      pending=pending.filter(function(item){
+        var element;
+        try{element=document.querySelectorAll(item.selector)[item.index]}catch(error){return false}
+        if(!element)return false;
+        if(!element.getClientRects().length)return true;
+        var loading=document.querySelector("[data-watchlist-code]");
+        if(element.classList.contains("watchlist-table-wrap")&&loading&&loading.disabled)return true;
+        element.scrollLeft=Number(item.left)||0;
+        element.scrollTop=Number(item.top)||0;
+        // Accept the browser's clamped position if the refreshed list is shorter.
+        return false
+      })
     };
+    // Watchlist rows arrive asynchronously; retry only positions not yet restored.
+    var body=document.querySelector("[data-watchlist-body]");
+    if(body)new MutationObserver(restore).observe(body,{childList:true,subtree:true});
+    document.querySelectorAll("[data-hot-stock-tab],[data-hot-plate-tab]").forEach(function(button){
+      button.addEventListener("click",function(){window.requestAnimationFrame(restore)})
+    });
     window.requestAnimationFrame(function(){
       restore();
+      window.scrollTo(Number(state.x)||0,Number(state.y)||0);
       window.requestAnimationFrame(restore)
     })
   }
@@ -2080,8 +2228,10 @@ def render_dashboard(
         concepts = (hot_rankings.get("concepts") or [])[:30]
         industries = (hot_rankings.get("industries") or [])[:30]
         indices = (hot_rankings.get("indices") or [])[:30]
+        etfs = (hot_rankings.get("etfs") or [])[:50]
+        articles = (hot_rankings.get("articles") or [])[:100]
         errors = hot_rankings.get("errors") or []
-        if stocks or concepts or industries or indices or errors:
+        if stocks or concepts or industries or indices or etfs or articles or errors:
             error_text = (
                 " · " + html.escape("；".join(errors))
                 if errors else ""
@@ -2089,17 +2239,18 @@ def render_dashboard(
             hot_rankings_html = (
                 '<section class="hot-rankings"><div class="section-head">'
                 '<h2>同花顺热榜</h2>'
-                f'<small>1小时热度 · 最多30名 · 更新 '
+                f'<small>热股/板块最多30名 · ETF前50名 · 更新 '
                 f'{html.escape(str(hot_rankings.get("updated_at") or last.snapshot_time))}'
                 f"{error_text}</small></div>"
                 '<div class="hot-rank-grid">'
-                f"{hot_stock_panel(stocks)}"
-                f"{hot_plate_panel(concepts, industries, indices)}"
+                f"{hot_stock_panel(stocks, articles)}"
+                f"{hot_plate_panel(concepts, industries, indices, etfs)}"
                 "</div><p class=\"note\">热度为同花顺用户关注度指标；涨跌幅为榜单接口实时值。"
                 "“上榜原因”优先展示同花顺分析标题，其次展示人气/概念标签；"
                 "股票榜新增自选股页签，可手动添加A股、港股、美股和韩股；"
+                "热门文章按同花顺关注度榜排名，展示标题、热度和关联股票，点击在新标签页打开原文；"
                 "自选行情优先取同花顺，公开端点未覆盖或暂不可用时自动切换备用源。"
-                "概念、行业、指数三个板块榜可点击页签切换；行业榜展示连续上榜、涨停家数及关联ETF。"
+                "板块榜可切换概念、行业、指数和热门ETF；ETF按24小时热度排名，展示名称、代码和同花顺标签；热股为1小时热度。"
                 "各板块榜按接口实际返回数量展示，不补造缺失名次。</p></section>"
             )
     else:
@@ -2122,7 +2273,7 @@ def render_dashboard(
     valuation_html = market_valuation_section(valuation_file)
     doc = f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>A股市场情绪仪表盘</title><style>
 body{{margin:0;background:#f6f8fb;color:#182b49;font:14px -apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif}}main{{max-width:1140px;margin:auto;padding:28px 20px 48px}}h1{{margin:0;font-size:27px}}.sub,small,.note{{color:#68778d}}.cards,.grid{{display:grid;gap:14px}}.cards{{grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin:14px 0}}.grid{{grid-template-columns:2fr 1fr}}.trend-grid{{grid-template-columns:1fr;margin:14px 0}}.trend-grid>section:first-child{{grid-column:auto}}.card,section{{box-sizing:border-box;background:#fff;border:1px solid #e6edf5;border-radius:12px;padding:18px}}.value{{font-size:30px;font-weight:700;margin:7px 0}}h2{{font-size:16px;margin:0 0 12px}}svg{{width:100%;display:block}}.axis{{stroke:#dfe7f0}}.score{{fill:none;stroke:#5a4fcf;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}}.score-halo{{fill:none;stroke:#fff;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:.78}}.sentiment-band-cold-deep{{fill:#087f5b;opacity:.16}}.sentiment-band-cold{{fill:#3b9b63;opacity:.12}}.sentiment-band-neutral{{fill:#f4c95d;opacity:.20}}.sentiment-band-hot{{fill:#df655f;opacity:.12}}.sentiment-band-hot-deep{{fill:#b42318;opacity:.16}}.sentiment-band-label{{font-size:12px;font-weight:700;text-anchor:end;opacity:.78}}.amount{{fill:none;stroke:#2869b2;stroke-width:2}}.mean{{fill:none;stroke:#ec8b00;stroke-width:2}}.tone{{font-weight:700}}.tone-cold-deep{{color:#087f5b}}.tone-cold{{color:#3b9b63}}.tone-neutral{{color:#b47b00}}.tone-hot{{color:#df655f}}.tone-hot-deep{{color:#b42318}}.tone-missing{{color:#8a96a8}}.amount-compare{{display:block;margin-top:7px;font-weight:700;line-height:1.45}}.volume-up{{color:#b42318}}.volume-down{{color:#087f5b}}.rise{{color:#e5484d}}.fall{{color:#19a665}}.index-market,.distribution-market,.industry-market,.hot-rankings{{margin-top:20px}}.section-head{{display:flex;align-items:baseline;justify-content:space-between;gap:12px}}.section-head h2{{margin-bottom:12px}}.index-grid{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}}.index-card{{box-sizing:border-box;border:1px solid transparent;border-radius:10px;padding:15px 14px 10px;min-width:0}}.index-value{{font-size:24px;font-weight:750;line-height:1.1;font-variant-numeric:tabular-nums}}.index-meta{{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-top:7px;white-space:nowrap}}.index-meta span{{color:#223047}}.index-meta b{{font-size:13px}}.index-spark{{height:58px;margin-top:10px}}.index-spark path{{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}}.market-up{{color:#e5484d;background:#fff5f5;border-color:#ffe3e3}}.market-down{{color:#19a665;background:#f2fbf7;border-color:#dff5e8}}.market-flat{{color:#b47b00;background:#fff9e8;border-color:#f9edbd}}.distribution-bars{{height:180px;display:grid;grid-template-columns:repeat(11,minmax(0,1fr));gap:7px;align-items:end;border-bottom:1px solid #dfe7f0;padding:0 5px}}.distribution-bin{{height:175px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;min-width:0}}.distribution-bin b{{font-size:12px;font-variant-numeric:tabular-nums;margin-bottom:5px}}.distribution-bin i{{display:block;width:min(34px,75%);min-height:4px;border-radius:6px 6px 2px 2px}}.distribution-bin span{{height:27px;margin-top:6px;font-size:11px;color:#68778d;white-space:nowrap}}.bin-up b{{color:#e5484d}}.bin-up i{{background:#e5484d}}.bin-down b{{color:#19a665}}.bin-down i{{background:#19a665}}.bin-flat b{{color:#8a96a8}}.bin-flat i{{background:#aeb8c5}}.distribution-progress{{margin-top:13px}}.distribution-progress-labels{{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:14px;font-variant-numeric:tabular-nums}}.distribution-progress-labels span{{color:#68778d}}.distribution-track{{display:flex;width:100%;height:9px;margin-top:8px;background:#edf1f6;border-radius:7px;overflow:hidden}}.distribution-track i{{display:block;height:100%;min-width:1px}}.progress-rise{{background:#e5484d}}.progress-flat{{background:#aeb8c5}}.progress-fall{{background:#19a665}}.market-kpis{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}}.market-kpis article{{border:1px solid #e6edf5;border-radius:10px;padding:14px;min-width:0;background:#fbfcfe}}.market-kpis article>div{{font-size:22px;font-weight:750;margin:8px 0;font-variant-numeric:tabular-nums}}.market-kpis article>small:last-child{{display:block;line-height:1.45}}.dragon-tiger-date{{display:block;margin-top:3px;font-size:11px}}.market-kpis .dragon-tiger-columns{{display:grid;grid-template-columns:minmax(0,1fr) 52px 78px;gap:5px;margin:10px 0 2px;font-size:10px;font-weight:500;color:#8a96a8}}.dragon-tiger-columns span:nth-child(n+2){{text-align:right}}.dragon-tiger-list{{list-style:none;margin:0;padding:0}}.dragon-tiger-list li{{display:grid;grid-template-columns:minmax(0,1fr) 52px 78px;align-items:center;gap:5px;padding:6px 0;border-top:1px solid #edf1f6;font-size:11px;font-variant-numeric:tabular-nums}}.dragon-tiger-list li>span:nth-child(n+2){{text-align:right;white-space:nowrap;font-weight:700}}.dragon-tiger-name{{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:#223047}}.dragon-tiger-name i{{display:inline-grid;place-items:center;width:16px;height:16px;margin-right:4px;border-radius:4px;background:#edf1f6;color:#68778d;font-size:9px;font-style:normal}}.market-kpis .dragon-tiger-empty{{margin:18px 0 0;font-size:13px;font-weight:500;color:#8a96a8}}.industry-block+ .industry-block{{margin-top:18px}}.industry-block h3{{display:flex;align-items:center;gap:7px;margin:4px 0 10px;font-size:14px}}.industry-block h3 span{{width:9px;height:9px;border-radius:50%}}.heat-up-dot{{background:#e5484d}}.heat-down-dot{{background:#19a665}}.industry-heatmap{{position:relative;height:300px;border:1px solid #edf1f6;border-radius:9px;overflow:hidden;background:#f3f6fa}}.industry-tile{{position:absolute;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;border:2px solid #fff;border-radius:7px;padding:10px;text-align:center;overflow:hidden;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.55);container-type:size;transition:filter .15s ease,transform .15s ease}}.industry-tile:hover{{z-index:2;filter:saturate(1.1) brightness(.96);box-shadow:0 4px 14px rgba(24,43,73,.18)}}.industry-tile-label{{display:flex;min-width:0;flex-direction:column;align-items:center;justify-content:center}}.industry-tile b{{max-width:100%;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.industry-tile strong{{font-size:19px;margin-top:7px;font-variant-numeric:tabular-nums}}@container (max-width:70px){{.industry-tile b{{font-size:11px}}.industry-tile strong{{font-size:14px;margin-top:4px}}}}@container (max-width:45px){{.industry-tile-label{{display:none}}}}@container (max-height:32px){{.industry-tile-label{{display:none}}}}.hot-rank-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}.hot-panel{{min-width:0;border:1px solid #e6edf5;border-radius:10px;background:#fbfcfe}}.hot-panel-head{{display:flex;align-items:baseline;justify-content:space-between;padding:13px 14px 8px}}.hot-panel-head h3{{margin:0;font-size:15px}}.hot-table-wrap{{max-height:650px;overflow:auto}}.hot-table{{font-size:12px;table-layout:fixed}}.hot-table th{{position:sticky;top:0;z-index:1;background:#f5f7fa}}.hot-table th:nth-child(1){{width:36px}}.hot-table th:nth-child(2){{width:80px}}.hot-table th:nth-child(3){{width:58px}}.hot-table th:nth-child(4){{width:50px}}.hot-table td{{vertical-align:top}}.rank-badge{{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:6px;color:#8a96a8;background:#edf1f6}}.rank-top{{color:#fff;background:#ef4444}}.stock-code{{display:block;margin-top:3px;font-size:10px}}.hot-number{{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}}.hot-reason{{line-height:1.45;overflow:hidden}}.hot-reason span{{display:inline-block;max-width:100%;margin:0 4px 4px 0;padding:2px 5px;border:1px solid #dde5ef;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#536278;background:#fff}}.hot-reason span:first-child{{color:#d33d43;border-color:#f3c6c8;background:#fff7f7}}.hot-reason .reason-missing{{color:#8a96a8;border-color:#dde5ef;background:#fff}}.hot-empty{{padding:28px;text-align:center;color:#8a96a8}}.component{{margin:17px 0}}.component strong{{float:right}}.definition{{display:block;margin-top:7px;line-height:1.55}}.bar{{clear:both;height:9px;background:#edf1f6;border-radius:8px;margin:8px 0}}.bar i{{display:block;height:100%;background:#2869b2;border-radius:8px}}table{{width:100%;border-collapse:collapse}}td,th{{padding:9px 6px;text-align:left;border-bottom:1px solid #edf1f6}}th{{color:#68778d;font-weight:500}}.note{{font-size:12px;line-height:1.6}}@media(max-width:900px){{.index-grid{{grid-template-columns:repeat(3,1fr)}}.market-kpis{{grid-template-columns:repeat(2,1fr)}}.hot-rank-grid{{grid-template-columns:1fr}}}}@media(max-width:720px){{.cards,.grid{{grid-template-columns:1fr 1fr}}.grid>section:first-child{{grid-column:span 2}}.trend-grid{{grid-template-columns:1fr}}.trend-grid>section:first-child{{grid-column:auto}}.index-grid{{grid-template-columns:repeat(2,1fr)}}.section-head{{display:block}}.distribution-bars{{gap:3px}}.distribution-bin span{{font-size:10px;transform:rotate(-35deg);transform-origin:top center;margin-top:9px}}.distribution-progress-labels{{font-size:12px;gap:5px}}.industry-heatmap{{height:330px}}.industry-tile{{padding:7px}}.industry-tile b{{font-size:12px}}.industry-tile strong{{font-size:15px;margin-top:4px}}.hot-table-wrap{{max-height:520px}}}}@media(max-width:450px){{.cards,.grid,.index-grid,.market-kpis{{grid-template-columns:1fr}}.grid>section:first-child{{grid-column:auto}}.hot-table thead{{display:none}}.hot-table,.hot-table tbody{{display:block}}.hot-table tr{{display:grid;grid-template-columns:34px minmax(0,1fr) 64px 58px;padding:8px 5px;border-bottom:1px solid #edf1f6}}.hot-table td{{display:block;padding:4px;border:0;min-width:0}}.hot-table td:nth-child(5){{grid-column:2/5;padding-top:0}}}}</style><main>
-<style>.extrema-dot{{stroke:#fff;stroke-width:2;pointer-events:none}}.extrema-text{{font-size:11px;font-weight:750;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;pointer-events:none}}.extrema-score{{fill:#5a4fcf}}.extrema-amount{{fill:#2869b2}}.extrema-mean{{fill:#d97706}}.chart-hit{{fill:transparent;stroke:transparent;stroke-width:2;cursor:pointer;outline:none}}.chart-hit-score:hover,.chart-hit-score:focus{{fill:#5a4fcf;stroke:#fff}}.chart-hit-amount:hover,.chart-hit-amount:focus{{fill:#2869b2;stroke:#fff}}.chart-hit-mean:hover,.chart-hit-mean:focus{{fill:#d97706;stroke:#fff}}.turnover-bar{{shape-rendering:geometricPrecision;cursor:pointer;outline:none}}.turnover-bar:hover,.turnover-bar:focus{{opacity:1;stroke:#fff;stroke-width:1.5}}.turnover-bar-up{{fill:#e5484d;opacity:.82}}.turnover-bar-down{{fill:#19a665;opacity:.82}}.turnover-bar-flat{{fill:#aeb8c5;opacity:.75}}.chart-data-popover{{position:fixed;z-index:200;width:max-content;max-width:min(300px,calc(100vw - 24px));padding:12px 34px 12px 14px;border:1px solid #d9e2ed;border-radius:10px;background:rgba(255,255,255,.98);box-shadow:0 8px 28px rgba(24,43,73,.22);color:#182b49;pointer-events:auto}}.chart-data-popover[hidden]{{display:none}}.chart-data-popover b,.chart-data-popover strong,.chart-data-popover span{{display:block}}.chart-data-popover b{{font-size:13px}}.chart-data-popover small{{display:block;margin-top:3px}}.chart-data-popover strong{{margin-top:7px;font-size:20px;font-variant-numeric:tabular-nums}}.chart-data-popover span{{margin-top:5px;color:#68778d;font-size:12px}}.chart-data-popover button{{position:absolute;top:5px;right:7px;border:0;background:transparent;color:#7c899a;font-size:20px;line-height:1;cursor:pointer}}.hot-plate-tabs{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;padding:0 12px 12px}}.hot-plate-tabs button{{appearance:none;border:1px solid #e3e9f1;border-radius:8px;padding:9px 6px;background:#f4f6f9;color:#59677c;font:inherit;font-weight:700;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease}}.hot-plate-tabs button:hover{{border-color:#f0a8ab;background:#fff7f7}}.hot-plate-tabs button[aria-selected="true"]{{border-color:#f3b4b7;background:#fff0f1;color:#d93f45;box-shadow:inset 0 -2px 0 #e5484d}}.hot-plate-tabs button small{{margin-left:4px;color:inherit;font-size:10px;font-weight:600}}.hot-plate-view[hidden]{{display:none}}@media(max-width:450px){{.hot-plate-tabs{{gap:4px;padding:0 7px 9px}}.hot-plate-tabs button{{padding:8px 3px;font-size:12px}}}}</style>
+<style>.extrema-dot{{stroke:#fff;stroke-width:2;pointer-events:none}}.extrema-text{{font-size:11px;font-weight:750;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;pointer-events:none}}.extrema-score{{fill:#5a4fcf}}.extrema-amount{{fill:#2869b2}}.extrema-mean{{fill:#d97706}}.chart-hit{{fill:transparent;stroke:transparent;stroke-width:2;cursor:pointer;outline:none}}.chart-hit-score:hover,.chart-hit-score:focus{{fill:#5a4fcf;stroke:#fff}}.chart-hit-amount:hover,.chart-hit-amount:focus{{fill:#2869b2;stroke:#fff}}.chart-hit-mean:hover,.chart-hit-mean:focus{{fill:#d97706;stroke:#fff}}.turnover-bar{{shape-rendering:geometricPrecision;cursor:pointer;outline:none}}.turnover-bar:hover,.turnover-bar:focus{{opacity:1;stroke:#fff;stroke-width:1.5}}.turnover-bar-up{{fill:#e5484d;opacity:.82}}.turnover-bar-down{{fill:#19a665;opacity:.82}}.turnover-bar-flat{{fill:#aeb8c5;opacity:.75}}.chart-data-popover{{position:fixed;z-index:200;width:max-content;max-width:min(300px,calc(100vw - 24px));padding:12px 34px 12px 14px;border:1px solid #d9e2ed;border-radius:10px;background:rgba(255,255,255,.98);box-shadow:0 8px 28px rgba(24,43,73,.22);color:#182b49;pointer-events:auto}}.chart-data-popover[hidden]{{display:none}}.chart-data-popover b,.chart-data-popover strong,.chart-data-popover span{{display:block}}.chart-data-popover b{{font-size:13px}}.chart-data-popover small{{display:block;margin-top:3px}}.chart-data-popover strong{{margin-top:7px;font-size:20px;font-variant-numeric:tabular-nums}}.chart-data-popover span{{margin-top:5px;color:#68778d;font-size:12px}}.chart-data-popover button{{position:absolute;top:5px;right:7px;border:0;background:transparent;color:#7c899a;font-size:20px;line-height:1;cursor:pointer}}.hot-plate-tabs{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;padding:0 12px 12px}}.hot-plate-tabs button{{appearance:none;border:1px solid #e3e9f1;border-radius:8px;padding:9px 6px;background:#f4f6f9;color:#59677c;font:inherit;font-weight:700;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease}}.hot-plate-tabs button:hover{{border-color:#f0a8ab;background:#fff7f7}}.hot-plate-tabs button[aria-selected="true"]{{border-color:#f3b4b7;background:#fff0f1;color:#d93f45;box-shadow:inset 0 -2px 0 #e5484d}}.hot-plate-tabs button small{{margin-left:4px;color:inherit;font-size:10px;font-weight:600}}.hot-plate-view[hidden]{{display:none}}@media(max-width:450px){{.hot-plate-tabs{{gap:4px;padding:0 7px 9px}}.hot-plate-tabs button{{padding:8px 3px;font-size:12px}}}}</style>
 <style>
 .industry-tile{{padding:4px}}
 .industry-tile-label{{display:flex;width:100%;min-width:0}}
@@ -2149,6 +2300,7 @@ body{{margin:0;background:#f6f8fb;color:#182b49;font:14px -apple-system,BlinkMac
 {valuation_html}
 <div id="chart-data-popover" class="chart-data-popover" role="status" aria-live="polite" hidden><button type="button" data-chart-popup-close aria-label="关闭">×</button><b data-chart-popup-series></b><small data-chart-popup-date></small><strong data-chart-popup-value></strong><span data-chart-popup-extra hidden></span></div>
 <script>document.querySelectorAll("[data-hot-plate-tab]").forEach(function(button){{button.addEventListener("click",function(){{var panel=button.closest(".hot-plate-panel");var key=button.getAttribute("data-hot-plate-tab");panel.querySelectorAll("[data-hot-plate-tab]").forEach(function(tab){{tab.setAttribute("aria-selected",String(tab===button))}});panel.querySelectorAll("[data-hot-plate-view]").forEach(function(view){{view.hidden=view.getAttribute("data-hot-plate-view")!==key}})}})}});</script>
+{DASHBOARD_VIEW_SCRIPT}
 {WATCHLIST_SCRIPT}
 {DASHBOARD_REFRESH_SCRIPT}
 <script>(function(){{var tip=document.getElementById("chart-data-popover");if(!tip)return;var series=tip.querySelector("[data-chart-popup-series]"),date=tip.querySelector("[data-chart-popup-date]"),value=tip.querySelector("[data-chart-popup-value]"),extra=tip.querySelector("[data-chart-popup-extra]");function hideTip(){{tip.hidden=true}}function showTip(target){{series.textContent=target.getAttribute("data-chart-series")||"";date.textContent=target.getAttribute("data-chart-date")||"";value.textContent=target.getAttribute("data-chart-value")||"";var extraText=target.getAttribute("data-chart-extra")||"";extra.textContent=extraText;extra.hidden=!extraText;tip.hidden=false;var targetRect=target.getBoundingClientRect(),tipRect=tip.getBoundingClientRect();var left=Math.min(window.innerWidth-tipRect.width-8,Math.max(8,targetRect.left+targetRect.width/2-tipRect.width/2));var top=targetRect.top-tipRect.height-10;if(top<8)top=Math.min(window.innerHeight-tipRect.height-8,targetRect.bottom+10);tip.style.left=left+"px";tip.style.top=Math.max(8,top)+"px"}}document.addEventListener("click",function(event){{var target=event.target.closest?event.target.closest("[data-chart-date]"):null;if(target){{showTip(target);return}}if(event.target.closest&&event.target.closest("#chart-data-popover")){{if(event.target.closest("[data-chart-popup-close]"))hideTip();return}}hideTip()}});document.addEventListener("keydown",function(event){{if(event.key==="Escape"){{hideTip();return}}var target=event.target.closest?event.target.closest("[data-chart-date]"):null;if(target&&(event.key==="Enter"||event.key===" ")){{event.preventDefault();showTip(target)}}}})}})();</script></main></html>'''

@@ -44,7 +44,7 @@ $marginOutput = Join-Path $PSScriptRoot "market_margin_balance.csv"
 $startupFailureSignal = Join-Path $PSScriptRoot ".dashboard_startup_failed"
 $dashboardPort = 8765
 $dashboardBaseUrl = "http://127.0.0.1:$dashboardPort/"
-$dashboardUrl = "${dashboardBaseUrl}#watchlist"
+$dashboardUrl = $dashboardBaseUrl
 $dashboardOpenedSignal = Join-Path $PSScriptRoot ".dashboard_opened"
 
 Remove-Item -LiteralPath $startupFailureSignal -Force -ErrorAction SilentlyContinue

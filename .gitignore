@@ -16,6 +16,7 @@ reports/
 /market_valuation_csi_all.csv
 /market_valuation_payload.json
 /market_valuation_swa.csv
+/market_index_valuations.json
 
 # Generated dashboards and valuation reports
 /a-share-pe-valuation-report.html

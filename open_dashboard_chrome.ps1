@@ -10,7 +10,7 @@ $httpChoice = Get-ItemProperty `
     -ErrorAction SilentlyContinue
 $browserProgId = if ($httpChoice -and $httpChoice.ProgId) { $httpChoice.ProgId } else { "DefaultBrowser" }
 
-$launchUrl = $BaseUrl.TrimEnd("/") + "/?dashboardLaunch=" + ([Guid]::NewGuid().ToString("N")) + "#watchlist"
+$launchUrl = $BaseUrl.TrimEnd("/") + "/?dashboardLaunch=" + ([Guid]::NewGuid().ToString("N"))
 Write-Host "Opening dashboard in browser ($browserProgId): $launchUrl" -ForegroundColor Cyan
 Start-Process -FilePath $launchUrl -ErrorAction Stop
 Start-Sleep -Milliseconds 1500

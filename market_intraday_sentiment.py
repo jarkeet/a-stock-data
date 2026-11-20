@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import math
 import re
@@ -479,8 +480,100 @@ def _normalize_ths_plate_list(items, top_n):
     return rows
 
 
+def fetch_ths_hot_etfs(top_n=50):
+    """ETF 24小时热度榜；标签失败时保留行情并单独报告错误。"""
+    items = (_ths_hot_get("etf", type="hot").get("list") or [])[:max(1, min(int(top_n), 50))]
+    if not items:
+        raise RuntimeError("同花顺ETF热度榜为空")
+    rows = [{
+        "rank": rank,
+        "code": str(item.get("code") or ""),
+        "name": str(item.get("name") or ""),
+        "heat": float(item["rate"]) if item.get("rate") is not None else None,
+        "change_pct": float(item["rise_and_fall"]) if item.get("rise_and_fall") is not None else None,
+        "tags": [],
+    } for rank, item in enumerate(items, 1)]
+    errors = []
+    try:
+        codes = [f'{item["market"]}:{item["code"]}' for item in items]
+        response = _session().post(
+            "https://dataq.10jqka.com.cn/dataapi/tagservice/fetch/v1/tag_data",
+            json={
+                "code_selectors": {"include": [{"type": "stock_code", "values": codes}]},
+                "tag_infos": [{"tag_key": key} for key in (
+                    "ifund_etf_t0", "ifund_biz_FS34806_tech_side", "ifund_biz_FS34806_fund_side",
+                )],
+            },
+            headers={"Source-Id": "ths-hot-list", "Referer": "https://eq.10jqka.com.cn/"},
+            timeout=20,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("status_code") != 0:
+            raise RuntimeError(payload.get("status_msg") or "ETF标签返回异常")
+        tags_by_code = {
+            item["code"]: list(dict.fromkeys(
+                str(value["show_tag"][0]) for value in (item.get("values") or [])
+                if value.get("show_tag")
+            )) for item in ((payload.get("data") or {}).get("data") or [])
+        }
+        for code, row in zip(codes, rows):
+            row["tags"] = tags_by_code.get(code, [])
+    except Exception as error:
+        errors.append(f"热门ETF标签：{type(error).__name__}")
+    return rows, errors
+
+
+def fetch_ths_hot_articles(top_n=100):
+    """同花顺热榜的热门文章，按源站排名展示（接口原始顺序为倒序）。"""
+    response = _session().get(
+        "https://ai.iwencai.com/index/urp/getdata/basic",
+        params={"tag": "同花顺热榜_新热文", "userid": "", "appName": "thsHotList"},
+        headers={"Referer": "https://eq.10jqka.com.cn/"},
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if str(payload.get("status_code")) != "0":
+        raise RuntimeError(payload.get("status_msg") or "同花顺热门文章返回异常")
+    components = (payload.get("answer") or {}).get("components") or []
+    items = (components[0].get("data") or {}).get("datas") if components else None
+    if not isinstance(items, list) or not items:
+        raise RuntimeError("同花顺热门文章榜为空")
+
+    def number(value):
+        try:
+            result = float(value)
+            return result if math.isfinite(result) else None
+        except (TypeError, ValueError):
+            return None
+
+    rows = []
+    for item in items:
+        title = html.unescape(re.sub(r"<[^>]+>", "", str(item.get("title") or ""))).strip()
+        rank = number(item.get("rank"))
+        if not title or rank is None or rank < 1:
+            continue
+        urls = item.get("contentUrl") or []
+        url = urls[0] if isinstance(urls, list) and urls else urls
+        rows.append({
+            "rank": int(rank),
+            "title": title,
+            "url": str(url or ""),
+            "heat": number(item.get("score")),
+            "stocks": [{
+                "name": str(stock.get("stockName") or ""),
+                "code": str(stock.get("stockCode") or ""),
+                "change_pct": number(stock.get("stockZdf")),
+            } for stock in (item.get("stockInfo") or []) if isinstance(stock, dict)],
+        })
+    if not rows:
+        raise RuntimeError("同花顺热门文章字段缺失")
+    return sorted(rows, key=lambda row: row["rank"])[:max(1, min(int(top_n), 100))]
+
+
 def fetch_ths_hot_rankings(top_n=30):
-    """同花顺小时热股榜，以及概念、行业和指数板块榜。"""
+    """同花顺小时热股、板块榜，以及前50名ETF热度榜。"""
     top_n = max(1, min(int(top_n), 30))
     result = {
         "source": "同花顺",
@@ -491,6 +584,8 @@ def fetch_ths_hot_rankings(top_n=30):
         "concepts": [],
         "industries": [],
         "indices": [],
+        "etfs": [],
+        "articles": [],
         "errors": [],
     }
     try:
@@ -538,6 +633,15 @@ def fetch_ths_hot_rankings(top_n=30):
         result["indices"] = _ths_index_hot_get(top_n)
     except Exception as error:
         result["errors"].append(f"指数板块榜：{type(error).__name__}")
+    try:
+        result["etfs"], etf_errors = fetch_ths_hot_etfs()
+        result["errors"].extend(etf_errors)
+    except Exception as error:
+        result["errors"].append(f"热门ETF榜：{type(error).__name__}")
+    try:
+        result["articles"] = fetch_ths_hot_articles()
+    except Exception as error:
+        result["errors"].append(f"热门文章：{type(error).__name__}")
     return result
 
 

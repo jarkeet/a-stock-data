@@ -153,6 +153,7 @@ def _fetch_csi_year(code: str, year: int, timeout=60) -> list[dict]:
             "pe": item.get("peg"),
         }
         for item in (response.json().get("data") or [])
+        if item.get("tradeDate") != f"{year}0101"
     ]
 
 
@@ -184,6 +185,9 @@ def _read_series(path: Path, kind: str) -> pd.DataFrame:
     if kind == "swa" and "日期" in frame:
         frame = frame.rename(columns={"日期": "date", "收盘": "close", "PE": "pe"})
     frame["date"] = pd.to_datetime(frame["date"], errors="coerce")
+    if kind == "csi":
+        # 年度区间接口会把首个交易日的值填到元旦。
+        frame = frame[~(frame.date.dt.month.eq(1) & frame.date.dt.day.eq(1))].copy()
     frame["pe"] = pd.to_numeric(frame["pe"], errors="coerce")
     frame["close"] = pd.to_numeric(frame["close"], errors="coerce")
     return frame.dropna(subset=["date", "pe", "close"]).query("pe > 0").sort_values("date").reset_index(drop=True)
@@ -209,12 +213,12 @@ def _stats(frame: pd.DataFrame, label: str) -> dict:
     }
 
 
-def _weekly_series(frame: pd.DataFrame, column="pe") -> list[list]:
-    daily = frame.set_index("date")[column]
-    weekly = daily.resample("W").last().dropna()
-    if weekly.index[-1].normalize() != daily.index[-1].normalize():
-        weekly = pd.concat([weekly, pd.Series([daily.iloc[-1]], index=[daily.index[-1]])])
-    return [[int(index.timestamp() * 1000), round(float(value), 2)] for index, value in weekly.items()]
+def _weekly_series(frame: pd.DataFrame, column="pe", digits=2) -> list[list]:
+    weekly = frame.groupby(pd.Grouper(key="date", freq="W")).tail(1)
+    return [
+        [int(date.timestamp() * 1000), round(float(value), digits)]
+        for date, value in zip(weekly.date, weekly[column])
+    ]
 
 
 def _rolling_percentile(frame: pd.DataFrame) -> list[list]:
@@ -223,9 +227,8 @@ def _rolling_percentile(frame: pd.DataFrame) -> list[list]:
         lambda values: (values[:-1] < values[-1]).mean() * 100,
         raw=True,
     )
-    daily = pd.Series(ranked.values, index=frame.date).dropna()
-    weekly = daily.resample("W").last().dropna()
-    return [[int(index.timestamp() * 1000), round(float(value), 1)] for index, value in weekly.items()]
+    daily = frame.assign(percentile=ranked).dropna(subset=["percentile"])
+    return _weekly_series(daily, "percentile", digits=1)
 
 
 def _histogram(frame: pd.DataFrame, bins=45) -> list[dict]:
@@ -356,6 +359,7 @@ def _backtest_payload(swa: pd.DataFrame) -> dict:
         "current": {
             "pe": round(current_pe, 2),
             "pct": round(current_pct, 1),
+            "bucket": next(label for low, high, label in BUCKETS if low <= current_pct < high),
             "sample": int(len(swa)),
             "start": swa.date.min().strftime("%Y-%m-%d"),
         },

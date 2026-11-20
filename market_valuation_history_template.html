@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>A股 PE-TTM 历史分位图（万得全A / 沪深300）· 2026-09-02</title>
+<title>A股 PE-TTM 历史分位图（万得全A / 沪深300）</title>
 <style>
 :root{
   --bg:#f7f8fa; --card:#ffffff; --ink:#1a1d24; --ink2:#4a5160; --ink3:#7b8494;
@@ -21,9 +21,6 @@ body{
 header{margin-bottom:24px;padding-bottom:20px;border-bottom:2px solid var(--ink)}
 h1{font-size:26px;font-weight:700;letter-spacing:-.3px;margin-bottom:8px}
 .sub{color:var(--ink2);font-size:14px}
-.meta{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
-.tag{background:var(--band);color:var(--ink2);padding:3px 10px;border-radius:4px;font-size:12px;border:1px solid var(--line)}
-.tag.hot{background:#fdeceb;color:var(--up);border-color:#f6cfcb}
 h2{font-size:18px;font-weight:700;margin:34px 0 6px;padding-left:11px;border-left:4px solid var(--accent)}
 h2 .en{font-size:12px;color:var(--ink3);font-weight:400;margin-left:8px}
 .lead{color:var(--ink2);font-size:13.5px;margin-bottom:16px;padding-left:15px}
@@ -106,13 +103,7 @@ footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-si
 
 <header>
   <h1>A 股 PE-TTM 历史分位图：万得全A &amp; 沪深300</h1>
-  <div class="sub">近 20 年（2006-01 ~ 2026-08）滚动市盈率走势、20%/80% 分位参考线与当前位置标定</div>
-  <div class="meta">
-    <span class="tag">生成时间：2026-09-02</span>
-    <span class="tag">万得全A 样本 4,994 交易日</span>
-    <span class="tag">沪深300 样本 3,637 交易日</span>
-    <span class="tag hot">万得全A 当前分位 78.0%</span>
-  </div>
+  <div class="sub">日频 PE-TTM、全样本分位与滚动 10 年分位</div>
 </header>
 
 <h2>一、当前位置速览<span class="en">Where are we now</span></h2>
@@ -120,7 +111,7 @@ footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-si
 <div class="cards" id="cards"></div>
 
 <h2>二、万得全A · PE-TTM 近 20 年走势<span class="en">Wind All-A index</span></h2>
-<div class="lead">口径：申万A指（覆盖全部 A 股，与万得全A 成分高度重合）日频滚动市盈率，2006-01-04 ~ 2026-08-31。</div>
+<div class="lead" id="swa-period"></div>
 <div class="chartbox">
   <div class="ctrls" id="ctrl-swa">
     <span class="lb">时间</span>
@@ -145,7 +136,7 @@ footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-si
 </div>
 
 <h2>三、沪深300 · PE-TTM 走势<span class="en">CSI 300</span></h2>
-<div class="lead">口径：中证指数官网官方 PE-TTM 序列，起始 2011-06-28（中证官网该字段最早发布日），至 2026-09-01。</div>
+<div class="lead" id="hs300-period"></div>
 <div class="chartbox">
   <div class="ctrls" id="ctrl-hs300">
     <span class="lb">时间</span>
@@ -166,7 +157,8 @@ footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-si
 </div>
 
 <h2>四、滚动 10 年分位曲线<span class="en">Rolling 10Y percentile</span></h2>
-<div class="lead">每个时点的 PE 在过去 10 年（2,430 交易日）窗口内的百分位。相比全样本分位，滚动分位对"当前是否过热"的刻画更及时。</div>
+<div class="lead">按日计算 PE-TTM 在最长 2,430 个交易日（约 10 年）窗口内的分位，样本不足 1,458 日时跳过。每周显示最后一个有数据的交易日。移动鼠标或点击图表可查看读数。</div>
+<div class="lead" id="pct-as-of"></div>
 <div class="chartbox">
   <div id="chart-pct"></div>
   <div class="legend">
@@ -191,11 +183,10 @@ footer{margin-top:36px;padding-top:16px;border-top:1px solid var(--line);font-si
 <div class="note">
   <b>数据口径与限制说明</b>
   <ul>
-    <li><b>万得全A</b>：万得全A 指数（881001.WI）为商用数据，无公开免费的历史 PE 日频接口。此处采用<b>申万A指（801003）</b>作为代理 —— 同样覆盖全部 A 股、同样为整体法滚动市盈率，2026-08-31 读数 23.41，与全A口径的 Wind 值 20.67 同量级。序列自 2006-01-04 起完整覆盖 20.7 年。</li>
-    <li><b>沪深300 / 中证全指</b>：采用中证指数官网官方 PE-TTM 字段。该字段官网最早发布日为 <b>2011-06-28</b>，故这两条序列为 15.2 年而非 20 年。</li>
+    <li><b>万得全A</b>：本报告使用<b>申万A指（801003）</b>的日频整体法滚动市盈率作为万得全A（881001.WI）的代理。</li>
+    <li><b>沪深300 / 中证全指</b>：采用中证指数官网日频 PE-TTM 序列。</li>
     <li><b>口径不可直接横向比较</b>：申万A指（整体法含亏损）与中证官方口径（成分股筛选与剔除规则不同）绝对值存在差异。分位数在同一序列内部计算，横向比较时应看<b>分位</b>而非绝对 PE。</li>
-    <li><b>交叉校验</b>：2026-08-31/09-01 各口径读数 —— 申万A指 23.41 / 中证全指（官网 xls 市盈率1）19.88 / 沪深300（官网 xls 市盈率1）15.04 / 全A（Wind 口径，来自 westock）20.67。</li>
-    <li><b>采图降采样</b>：图表按周取最后一个交易日绘制（约 1,000 点），分位统计与极值判定均基于全量日频数据计算，不受降采样影响。</li>
+    <li><b>图表采样</b>：曲线按周取最后一个有数据的交易日绘制，分位和极值按日频数据计算。</li>
   </ul>
 </div>
 
@@ -222,6 +213,11 @@ function fmtDate(ts){
   const d = new Date(ts);
   const p = n => String(n).padStart(2,"0");
   return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate());
+}
+function nearestPoint(points, timestamp){
+  return points.reduce((best, point) =>
+    Math.abs(point[0] - timestamp) < Math.abs(best[0] - timestamp) ? point : best
+  );
 }
 function fmtY(ts){
   const d = new Date(ts);
@@ -350,9 +346,7 @@ function lineChart(mountId, cfg){
     const r = svg.getBoundingClientRect();
     const px = (ev.clientX - r.left) / r.width * W;
     const t = x0 + (px - P.l) / iw * (x1 - x0);
-    let idx = 0, best = Infinity;
-    for(let i=0;i<pts.length;i++){ const dd = Math.abs(pts[i][0]-t); if(dd<best){best=dd;idx=i;} }
-    const p = pts[idx];
+    const p = nearestPoint(pts, t);
     hl.setAttribute("x1", sx(p[0])); hl.setAttribute("x2", sx(p[0])); hl.setAttribute("opacity", .35);
     hd.setAttribute("cx", sx(p[0])); hd.setAttribute("cy", sy(p[1])); hd.setAttribute("opacity", 1);
     const pct = percentRank(sortedAll, p[1]);
@@ -390,11 +384,15 @@ function logTicks(lo, hi){
 function pctChart(mountId){
   const host = document.getElementById(mountId);
   host.innerHTML = "";
-  const W = 1200, H = 380, P = {t:20, r:26, b:44, l:64};
+  const W = 1200, H = 380, P = {t:20, r:110, b:44, l:64};
   const iw = W - P.l - P.r, ih = H - P.t - P.b;
-  const a = DATA.series.swa.rolling10y, b = DATA.series.hs300.rolling10y;
+  const swa = DATA.series.swa, hs300 = DATA.series.hs300;
+  const a = swa.rolling10y, b = hs300.rolling10y;
+  document.getElementById("pct-as-of").textContent = [hs300, swa].map(({stats, rolling10y}) =>
+    `${stats.label}截至 ${stats.end}，PE-TTM ${stats.current.toFixed(2)} 倍，滚动分位 ${rolling10y[rolling10y.length-1][1].toFixed(1)}%`
+  ).join(" · ");
   const x0 = Math.max(a[0][0], b[0][0]);
-  const x1 = Math.min(a[a.length-1][0], b[b.length-1][0]);
+  const x1 = Math.max(a[a.length-1][0], b[b.length-1][0]);
   const sx = t => P.l + (t - x0) / (x1 - x0) * iw;
   const sy = v => P.t + ih * (100 - v) / 100;
   const svg = el("svg", {viewBox:"0 0 "+W+" "+H});
@@ -419,20 +417,76 @@ function pctChart(mountId){
     svg.appendChild(el("text", {x:sx(ts), y:P.t+ih+20, "text-anchor":"middle", "font-size":11, fill:"#7b8494"}, String(y)));
   }
 
-  function draw(arr, color, name){
-    const pts = arr.filter(p => p[0] >= x0 && p[0] <= x1);
+  const lines = [
+    {series: hs300, name:"沪深300", color:"#2b5cd9"},
+    {series: swa, name:"万得全A", color:"#d03a2c"}
+  ].map(line => ({
+    ...line,
+    points: line.series.rolling10y.filter(([t]) => t >= x0 && t <= x1),
+    pe: new Map(line.series.data)
+  }));
+  const guide = el("line", {y1:P.t, y2:P.t+ih, stroke:"#1a1d24", "stroke-width":1, opacity:0});
+  const readouts = new Map();
+  lines.forEach(({points:pts, color, name}, index) => {
     const d = pts.map((p,i) => (i?"L":"M") + sx(p[0]).toFixed(1) + " " + sy(p[1]).toFixed(1)).join(" ");
     svg.appendChild(el("path", {d:d, fill:"none", stroke:color, "stroke-width":1.7, "stroke-linejoin":"round"}));
     const last = pts[pts.length-1];
-    svg.appendChild(el("circle", {cx:sx(last[0]), cy:sy(last[1]), r:4.5, fill:color, stroke:"#fff", "stroke-width":1.6}));
+    const marker = el("circle", {cx:sx(last[0]), cy:sy(last[1]), r:4.5, fill:color, stroke:"#fff", "stroke-width":1.6});
+    marker.appendChild(el("title", {}, `${name} ${fmtDate(last[0])} · ${last[1].toFixed(1)}%`));
+    svg.appendChild(marker);
     svg.appendChild(el("text", {x:sx(last[0])+8, y:sy(last[1])+4, "font-size":12, fill:color, "font-weight":700},
       name + " " + last[1].toFixed(1) + "%"));
-  }
-  draw(b, "#2b5cd9", "沪深300");
-  draw(a, "#d03a2c", "万得全A");
+    pts.forEach(([t, pct]) => {
+      if(!readouts.has(t)) readouts.set(t, []);
+      readouts.get(t)[index] = pct;
+    });
+  });
 
   svg.appendChild(el("line", {x1:P.l, y1:P.t, x2:P.l, y2:P.t+ih, stroke:"#d8dce4", "stroke-width":1}));
+  svg.appendChild(guide);
+  const dots = lines.map(({color}) => {
+    const dot = el("circle", {r:4.5, fill:color, stroke:"#fff", "stroke-width":1.5, opacity:0});
+    svg.appendChild(dot);
+    return dot;
+  });
+  const hit = el("rect", {x:P.l, y:P.t, width:iw, height:ih, fill:"transparent", cursor:"crosshair"});
+  svg.appendChild(hit);
   host.appendChild(svg);
+
+  const dates = Array.from(readouts).sort((left, right) => left[0] - right[0]);
+  const tip = document.getElementById("tip");
+  function showReadout(ev){
+    const rect = svg.getBoundingClientRect();
+    const px = (ev.clientX - rect.left) / rect.width * W;
+    const [date, values] = nearestPoint(dates, x0 + (px - P.l) / iw * (x1 - x0));
+    const x = sx(date);
+    guide.setAttribute("x1", x);
+    guide.setAttribute("x2", x);
+    guide.setAttribute("opacity", .35);
+    const rows = lines.map(({name, pe}, index) => {
+      const pct = values[index];
+      const dot = dots[index];
+      dot.setAttribute("opacity", pct === undefined ? 0 : 1);
+      if(pct === undefined) return `${name}　—`;
+      dot.setAttribute("cx", x);
+      dot.setAttribute("cy", sy(pct));
+      const value = pe.get(date);
+      const peText = value === undefined ? "" : `　PE-TTM <b>${value.toFixed(2)} 倍</b>`;
+      return `${name}　滚动分位 <b>${pct.toFixed(1)}%</b>${peText}`;
+    });
+    tip.innerHTML = `<b>${fmtDate(date)}</b><br>${rows.join("<br>")}`;
+    tip.style.opacity = 1;
+    const width = document.documentElement.clientWidth;
+    tip.style.left = Math.max(8, Math.min(ev.clientX + 14, width - tip.offsetWidth - 8)) + "px";
+    tip.style.top = Math.max(8, ev.clientY - tip.offsetHeight - 10) + "px";
+  }
+  hit.addEventListener("mousemove", showReadout);
+  hit.addEventListener("click", showReadout);
+  hit.addEventListener("mouseleave", () => {
+    tip.style.opacity = 0;
+    guide.setAttribute("opacity", 0);
+    dots.forEach(dot => dot.setAttribute("opacity", 0));
+  });
 }
 
 /* ---------- 直方图 ---------- */
@@ -482,15 +536,15 @@ function pctWord(p){ return p < 20 ? "低估" : p < 40 ? "偏低" : p < 60 ? "�
 
 function renderCards(){
   const host = document.getElementById("cards");
-  const order = [["swa","万得全A","申万A指口径 · 20.7年"], ["csi985","中证全指","中证官方口径 · 15.2年"], ["hs300","沪深300","中证官方口径 · 15.2年"]];
+  const order = [["swa","申万A指代理"], ["csi985","中证官方口径"], ["hs300","中证官方口径"]];
   host.innerHTML = order.map(o => {
     const s = DATA.series[o[0]].stats;
     const to80 = ((s.q80 / s.current - 1) * 100);
     return '<div class="card">' +
-      '<div class="ttl">' + o[1] + '</div>' +
-      '<div class="nm">' + o[2] + ' <small>' + s.start + ' ~ ' + s.end + '</small></div>' +
-      '<div class="bigrow"><div class="bigv">' + s.current + '</div>' +
-      '<div class="pctchip ' + pctClass(s.pct) + '">分位 ' + s.pct + '% · ' + pctWord(s.pct) + '</div></div>' +
+      '<div class="ttl">' + s.label + '</div>' +
+      '<div class="nm">' + o[1] + ' <small>' + s.start + ' ~ ' + s.end + '</small></div>' +
+      '<div class="bigrow"><div class="bigv">' + s.current.toFixed(2) + ' 倍</div>' +
+      '<div class="pctchip ' + pctClass(s.pct) + '">全样本分位 ' + s.pct.toFixed(1) + '% · ' + pctWord(s.pct) + '</div></div>' +
       '<div class="gauge"><div class="pin" style="left:' + s.pct.toFixed(1) + '%"></div></div>' +
       '<div class="gaugelbl"><span>0% 极冷</span><span>20% 低估</span><span>50%</span><span>80% 高估</span><span>100% 极热</span></div>' +
       '<div class="kv">' +
@@ -524,14 +578,18 @@ function renderAnchors(){
 
 /* ---------- 洞察 ---------- */
 function renderInsight(){
-  const a = DATA.series.swa.stats, c = DATA.series.hs300.stats;
-  const gap = (a.q80 - a.current).toFixed(2);
+  const {stats: a, rolling10y} = DATA.series.swa;
+  const c = DATA.series.hs300.stats;
+  const rollingPct = rolling10y[rolling10y.length-1][1];
   document.getElementById("insight").innerHTML =
-    "<h3>三个关键读数</h3><ul>" +
-    "<li><b>万得全A 已在 80% 分位门口。</b>当前 PE-TTM " + a.current + "，20 年分位 <b>" + a.pct + "%</b>，距 80% 高估线（" + a.q80 + "）仅剩 <b>" + gap + " 倍</b> —— 对应指数再涨约 " + ((a.q80/a.current-1)*100).toFixed(1) + "%（在盈利不变假设下）。20% 低估线在 " + a.q20 + "，意味着若回到低估区需下跌约 " + ((1-a.q20/a.current)*100).toFixed(1) + "%。</li>" +
-    "<li><b>沪深300 分位 " + c.pct + "%，明显低于全A 的 " + a.pct + "%。</b>两者相差 " + (a.pct - c.pct).toFixed(1) + " 个百分点，这是一个<b>结构性信号</b>：估值压力集中在中小盘与题材股，大盘蓝筹的相对位置并没有到极端。这也意味着如果市场调整，杀估值的主要承压方不是沪深300 权重股。</li>" +
-    "<li><b>历史极值提供了尺度感。</b>万得全A 的历史顶部是 2007 年的 " + a.max + " 倍（" + a.maxDate + "），历史底部是 2008 年 11 月的 " + a.min + " 倍 —— 与公认的 2007 年 50~70 倍顶部、2008 年 11 月 13 倍底部完全吻合，说明这条序列口径可靠。当前 " + a.current + " 倍处于 20 年样本的前 22% 高位区间，但距离泡沫顶点还有极大空间：这更像「盈利没跟上、靠低利率把估值推上去」的贵，而不是 2007 式的杠杆疯狂。</li>" +
-    "</ul>";
+    `<h3>三个关键读数</h3><ul>
+    <li><b>万得全A（申万A指代理）</b>截至 ${a.end}，PE-TTM 为 ${a.current.toFixed(2)} 倍，
+    全样本分位 ${a.pct.toFixed(1)}%（${pctWord(a.pct)}），滚动 10 年分位 ${rollingPct.toFixed(1)}%（${pctWord(rollingPct)}）。</li>
+    <li><b>沪深300</b>截至 ${c.end}，PE-TTM 为 ${c.current.toFixed(2)} 倍，
+    全样本分位 ${c.pct.toFixed(1)}%（${pctWord(c.pct)}）。</li>
+    <li><b>申万A指全样本参考线</b> 20% 分位对应 ${a.q20.toFixed(2)} 倍，80% 分位对应 ${a.q80.toFixed(2)} 倍。
+    样本内最低 ${a.min.toFixed(2)} 倍（${a.minDate}），最高 ${a.max.toFixed(2)} 倍（${a.maxDate}）。</li>
+    </ul>`;
 }
 
 /* ---------- 控制 ---------- */
@@ -581,6 +639,11 @@ function refsOf(s){
 }
 
 /* ---------- 启动 ---------- */
+const swaStats = DATA.series.swa.stats, hs300Stats = DATA.series.hs300.stats;
+document.getElementById("swa-period").textContent =
+  `申万A指（801003）日频 PE-TTM，${swaStats.start} 至 ${swaStats.end}（${swaStats.n.toLocaleString("zh-CN")} 个交易日）。`;
+document.getElementById("hs300-period").textContent =
+  `中证指数官网日频 PE-TTM，${hs300Stats.start} 至 ${hs300Stats.end}（${hs300Stats.n.toLocaleString("zh-CN")} 个交易日）。`;
 renderCards();
 renderAnchors();
 renderInsight();

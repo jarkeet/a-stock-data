@@ -18,6 +18,29 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from market_index_valuation import INDICES, index_valuation_data
+
+
+SITE_ROOT = Path(__file__).resolve().parent
+SITE_ASSETS = {
+    "/assets/market-site.css": "text/css; charset=utf-8",
+    "/assets/index-valuation.js": "text/javascript; charset=utf-8",
+    "/assets/market-show-logo.png": "image/png",
+}
+
+
+def site_navigation(active):
+    links = (("dashboard", "/", "市场仪表盘"), ("indices", "/indices/", "指数估值"))
+    menu = "".join(
+        f'<a href="{url}"' + (' aria-current="page"' if key == active else "") + f'>{label}</a>'
+        for key, url, label in links
+    )
+    return (
+        '<nav class="market-site-nav" aria-label="站点导航">'
+        '<a class="site-brand" href="/"><img src="/assets/market-show-logo.png" alt="Market Show" width="126" height="42"></a>'
+        f'<div class="site-links">{menu}</div></nav>'
+    )
+
 
 THS_TIME_URL = "https://d.10jqka.com.cn/v2/time/{identifier}/last.js"
 THS_REALHEAD_URL = "https://d.10jqka.com.cn/v2/realhead/{identifier}/last.js"
@@ -966,9 +989,11 @@ class WatchlistHandler(BaseHTTPRequestHandler):
         print(f"[watchlist] {self.address_string()} - {format_string % args}")
 
     def _send_json(self, payload: dict, status: int = 200):
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self._send_body(json.dumps(payload, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8", status)
+
+    def _send_body(self, body, content_type="text/html; charset=utf-8", status=200):
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -985,6 +1010,24 @@ class WatchlistHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "instance_token": self.server.instance_token,
             })
+            return
+        if path in SITE_ASSETS:
+            self._send_body((SITE_ROOT / path.lstrip("/")).read_bytes(), SITE_ASSETS[path])
+            return
+        detail = re.fullmatch(r"/index/([a-z0-9]+)/?", path)
+        if path in ("/indices", "/indices/") or (detail and detail[1] in INDICES):
+            page = (SITE_ROOT / "market_index_valuation.html").read_text(encoding="utf-8")
+            self._send_body(page.replace("<!-- SITE_NAVIGATION -->", site_navigation("indices")).encode("utf-8"))
+            return
+        valuation_api = re.fullmatch(r"/api/index-valuations(?:/([a-z0-9]+))?/?", path)
+        if valuation_api and (valuation_api[1] is None or valuation_api[1] in INDICES):
+            try:
+                payload = index_valuation_data(valuation_api[1])
+            except (OSError, ValueError) as error:
+                self.log_message("Index valuation: %s", error)
+                self._send_json({"error": "指数估值快照暂时不可用"}, 503)
+                return
+            self._send_json(payload)
             return
         if path == "/api/watchlist/search":
             params = parse_qs(parsed.query)
@@ -1020,15 +1063,7 @@ class WatchlistHandler(BaseHTTPRequestHandler):
             except OSError as error:
                 self.send_error(500, str(error))
                 return
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            try:
-                self.wfile.write(body)
-            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-                pass
+            self._send_body(body)
             return
         if path not in ("/", "/market_sentiment_dashboard.html"):
             self.send_error(404)
@@ -1038,15 +1073,9 @@ class WatchlistHandler(BaseHTTPRequestHandler):
         except OSError as error:
             self.send_error(500, str(error))
             return
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        try:
-            self.wfile.write(body)
-        except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-            pass
+        heading = "<h1>A股市场情绪仪表盘</h1>".encode("utf-8")
+        navigation = '<link rel="stylesheet" href="/assets/market-site.css">' + site_navigation("dashboard")
+        self._send_body(body.replace(heading, navigation.encode("utf-8") + heading, 1))
 
     def do_POST(self):
         path = urlparse(self.path).path
