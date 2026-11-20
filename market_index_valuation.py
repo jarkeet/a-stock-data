@@ -1,4 +1,5 @@
 """Public-API index valuations with explicit source dates and estimate coverage."""
+from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from io import BytesIO
@@ -23,17 +24,33 @@ INDICES = {
     "kc50": ("000688", "科创50", "宽基"),
     "zzhl": ("000922", "中证红利", "风格"),
     "zzyy": ("000933", "中证医药", "行业"),
+    "hsi": ("800000", "恒生指数", "港股"),
     "hstech": ("800700", "恒生科技指数", "港股"),
+    "h30533": ("H30533", "中概互联", "港股"),
+    "931787": ("931787", "港股创新药", "港股"),
 }
 DJ_URL = "https://danjuanfunds.com/djapi/index_eva/detail/"
 EM_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 HSTECH_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
-HSTECH_SOURCE = "https://www.hsi.com.hk/eng/indexes/all-indexes/hstech"
-HSTECH_HISTORY_URL = "https://etf.whatsid.me/api/valuation/history"
+BALANCED_URL = "https://xushilu.com/api/valuation/{symbol}/history"
+TENCENT_HK_KLINE_URL = "https://web.ifzq.gtimg.cn/appstock/app/hkfqkline/get"
+CSI_DETAIL_URL = "https://www.csindex.com.cn/#/indices/family/detail?indexCode="
+HK_INDICES = {
+    "hsi": {"symbol": "HSI", "snapshot": "HKHSI", "start": "1969-11-24", "source":
+            "https://www.hsi.com.hk/en-hk/indexes/all-indexes/index-details/?seriesCode=hsi"},
+    "hstech": {"symbol": "HSTECH", "snapshot": "HKHSTECH", "start": "2020-07-27", "source":
+               "https://www.hsi.com.hk/eng/indexes/all-indexes/hstech"},
+    "h30533": {"symbol": "H30533", "snapshot": "CSIH30533", "start": "2014-12-29", "source":
+               CSI_DETAIL_URL + "H30533", "etf": "513050", "benchmark": "中证海外中国互联网50指数（人民币）"},
+    "931787": {"symbol": "931787", "start": "2018-08-14", "source": CSI_DETAIL_URL + "931787",
+               "etf": "513120", "benchmark": "中证香港创新药指数（港元）"},
+}
+BALANCED_METRICS = {"hsi": ("pe", "pb"), "hstech": ("pe", "pb"), "h30533": ("pb",)}
 WEIGHT_URL = (
     "https://oss-ch.csindex.com.cn/static/html/csindex/public/uploads/file/autofile/closeweight/"
 )
 CACHE = ROOT / "market_index_valuations.json"
+CACHE_VERSION = 4
 MARKET_TZ = ZoneInfo("Asia/Shanghai")
 _LOCK = Lock()
 _LOG = logging.getLogger(__name__)
@@ -118,10 +135,10 @@ def _pb_snapshot(code):
     }
 
 
-def _hstech_valuation():
-    data = _danjuan_snapshot("HKHSTECH")
+def _hk_valuation_snapshot(symbol):
+    data = _danjuan_snapshot(symbol)
     if not data:
-        raise ValueError("No Hang Seng TECH valuation snapshot")
+        raise ValueError(f"No valuation snapshot for {symbol}")
     pe, pb = _number(data.get("pe")), _number(data.get("pb"))
     return {
         "date": _quote_date(data["ts"]), "start": _quote_date(data["begin_at"]) if data.get("begin_at") else None,
@@ -131,38 +148,25 @@ def _hstech_valuation():
     }
 
 
-def _hstech_history(previous, today):
-    """Read the provider's published cap-weighted PE-TTM/PB series for HK indices."""
-    headers = {"User-Agent": USER_AGENT}
-    if previous.get("etag"):
-        headers["If-None-Match"] = previous["etag"]
-    response = requests.get(HSTECH_HISTORY_URL, headers=headers, timeout=12)
-    if response.status_code == 304:
-        return previous
-    response.raise_for_status()
-    payload = response.json()
-    table = "display_history"
-    if (payload.get("success") is not True or payload.get("encoding") != "columnar-v1"
-            or payload.get("fields", {}).get(table) != ["pe", "pb"]):
-        raise ValueError("Unexpected Hang Seng TECH valuation history format")
-    calendar = payload["calendar"]
-    series = payload[table]["HSTECH"]
-    indices = series["d"]
-    pe, pb = series["v"]
-    if (not indices or len(indices) != len(pe) or len(indices) != len(pb)
-            or any(type(i) is not int or not 0 <= i < len(calendar) for i in indices)):
-        raise ValueError("Invalid Hang Seng TECH history columns")
-    days = [date.fromisoformat(calendar[i]) for i in indices]
-    last = days[-1]
-    if (days != sorted(set(days)) or days[0] < date(2020, 7, 27)
-            or last > min(today, date.fromisoformat(payload["dataAsOf"]))):
-        raise ValueError("Invalid Hang Seng TECH history dates")
-    rows = [[day.isoformat(), _number(p), _number(b)] for day, p, b in zip(days, pe, pb)]
-    if any(sum(row[column] is not None for row in rows) < 53 for column in (1, 2)):
-        raise ValueError("Insufficient Hang Seng TECH valuation history")
-    if previous.get("rows") and rows[-1][0] < previous["rows"][-1][0]:
-        return previous
-    return {"etag": response.headers.get("ETag"), "rows": rows}
+def _balanced_valuation_history(spec, metric, today):
+    """Read the public valuation series in its original Ping An Index methodology."""
+    field = "pe_ttm" if metric == "pe" else "pb"
+    payload = _get(BALANCED_URL.format(symbol=spec["symbol"]), params={"metric": field, "window": "all"}).json()
+    meta = payload["meta"]
+    if meta.get("metric") != field:
+        raise ValueError(f"Unexpected metric for {spec['symbol']}")
+    start = date.fromisoformat(spec["start"])
+    end = min(today, date.fromisoformat(meta["as_of"]))
+    rows = {}
+    for row in payload["data"]["series"]:
+        if row.get("calc_src") != "pingan_index":
+            raise ValueError(f"Unexpected valuation methodology for {spec['symbol']}")
+        day = date.fromisoformat(row["trade_date"])
+        if start <= day <= end and day.weekday() < 5 and (value := _number(row["value"])) is not None:
+            rows[day.isoformat()] = value
+    if not rows:
+        raise ValueError(f"No valid {field} history for {spec['symbol']}")
+    return rows
 
 
 def _hstech_closes(now):
@@ -184,6 +188,39 @@ def _hstech_closes(now):
     return closes
 
 
+def _hsi_closes(now):
+    closes = {}
+    for interval, count in (("week", 640), ("day", 10)):
+        payload = _get(TENCENT_HK_KLINE_URL, params={"param": f"hkHSI,{interval},,,{count},qfq"}).json()
+        for day, _, close, *_ in payload["data"]["hkHSI"][interval]:
+            trade_date = date.fromisoformat(day)
+            if (trade_date < now.date() or (trade_date == now.date() and now.hour >= 17)):
+                if (value := _number(close)) is not None:
+                    closes[day] = value
+    if not closes:
+        raise ValueError("No Hang Seng Index close history")
+    return closes
+
+
+def _csi_hk_history(code, start, now):
+    today = now.date().isoformat()
+    rows = _get(CSI_URL, params={
+        "indexCode": code, "startDate": start.replace("-", ""), "endDate": today.replace("-", ""),
+    }).json()["data"]
+    if not rows or any(row["indexCode"] != code for row in rows):
+        raise ValueError(f"Unexpected CSI history for {code}")
+    closes, pe = {}, {}
+    for row in rows:
+        day = datetime.strptime(row["tradeDate"], "%Y%m%d").date().isoformat()
+        if day < start or day > today or (day == today and now.hour < 17):
+            continue
+        if _number(row.get("tradingVol")) is None or (close := _number(row["close"])) is None:
+            continue
+        closes[day] = close
+        pe[day] = _number(row.get("peg"))
+    return {"closes": closes, "officialPe": pe}
+
+
 def _weights(code):
     columns = ["日期Date", "指数代码 Index Code", "成份券代码Constituent Code", "权重(%)weight"]
     response = _get(f"{WEIGHT_URL}{code}closeweight.xls")
@@ -199,11 +236,11 @@ def _weights(code):
     return datetime.strptime(date.iloc[0], "%Y%m%d").date().isoformat(), dict(zip(stocks, weights))
 
 
-def _stock_valuations(date):
-    """Fetch one same-day valuation cross-section for all indices sharing this weight date."""
+def _stock_pb(date):
+    """Fetch same-day stock PB for indices sharing this weight date."""
     params = {
         "reportName": "RPT_VALUEANALYSIS_DET",
-        "columns": "SECURITY_CODE,TRADE_DATE,PB_MRQ,PS_TTM",
+        "columns": "SECURITY_CODE,TRADE_DATE,PB_MRQ",
         "filter": f"(TRADE_DATE='{date}')", "pageSize": 4000,
         "sortColumns": "SECURITY_CODE", "sortTypes": "1",
     }
@@ -217,14 +254,14 @@ def _stock_valuations(date):
             code = row["SECURITY_CODE"]
             if row["TRADE_DATE"][:10] != date or code in values:
                 raise ValueError(f"Invalid valuation date or duplicate stock {code}")
-            values[code] = {"pb": _number(row.get("PB_MRQ")), "ps": _number(row.get("PS_TTM"))}
+            values[code] = _number(row.get("PB_MRQ"))
         if page >= result["pages"]:
             return values
         page += 1
 
 
-def _estimate(weights, values, key):
-    covered = [(weight, values.get(code, {}).get(key)) for code, weight in weights.items()]
+def _estimate_pb(weights, values):
+    covered = [(weight, values.get(code)) for code, weight in weights.items()]
     eligible = [(weight, value) for weight, value in covered if value is not None]
     matched = sum(weight for weight, _ in eligible)
     coverage = matched / sum(weights.values()) * 100
@@ -244,20 +281,41 @@ def _result(job, label):
         return None
 
 
+def _refresh_hk(cached, now, slot):
+    records = cached["records"]
+    for slug in HK_INDICES:
+        records.setdefault(slug, {})
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        valuation_jobs = {slug: pool.submit(_hk_valuation_snapshot, spec["snapshot"])
+                          for slug, spec in HK_INDICES.items() if "snapshot" in spec}
+        price_jobs = {"hsi": pool.submit(_hsi_closes, now), "hstech": pool.submit(_hstech_closes, now)}
+        csi_jobs = {slug: pool.submit(_csi_hk_history, spec["symbol"], spec["start"], now)
+                    for slug, spec in HK_INDICES.items() if "etf" in spec}
+        history_jobs = {(slug, metric): pool.submit(_balanced_valuation_history, HK_INDICES[slug], metric, now.date())
+                        for slug, metrics in BALANCED_METRICS.items() for metric in metrics}
+        for slug, job in valuation_jobs.items():
+            if observation := _result(job, f"{slug} valuation snapshot"):
+                records[slug].setdefault("valuations", {})[observation["date"]] = observation
+        for slug, job in price_jobs.items():
+            if closes := _result(job, f"{slug} close history"):
+                records[slug].setdefault("closes", {}).update(closes)
+        for slug, job in csi_jobs.items():
+            if data := _result(job, f"{slug} CSI history"):
+                for key, rows in data.items():
+                    records[slug].setdefault(key, {}).update(rows)
+        for (slug, metric), job in history_jobs.items():
+            if rows := _result(job, f"{slug} {metric} history"):
+                records[slug].setdefault("balancedRows", {}).setdefault(metric, {}).update(rows)
+    cached["hkSlot"] = slot
+
+
 def _refresh(cached, now, slot):
     records = cached.get("records", {})
     mainland = {slug: code for slug, (code, _, category) in INDICES.items() if category != "港股"}
     with ThreadPoolExecutor(max_workers=4) as pool:
-        hk_valuation_job = pool.submit(_hstech_valuation)
-        hk_closes_job = pool.submit(_hstech_closes, now)
         pe_jobs = {slug: pool.submit(_official_pe, code, now.date()) for slug, code in mainland.items()}
         pb_jobs = {slug: pool.submit(_pb_snapshot, code) for slug, code in mainland.items()}
         weight_jobs = {slug: pool.submit(_weights, code) for slug, code in mainland.items()}
-        hk = records.setdefault("hstech", {})
-        if observation := _result(hk_valuation_job, "Hang Seng TECH valuation"):
-            hk.setdefault("valuations", {})[observation["date"]] = observation
-        if closes := _result(hk_closes_job, "Hang Seng TECH close history"):
-            hk.setdefault("closes", {}).update(closes)
         for slug, job in pe_jobs.items():
             record = records.setdefault(slug, {})
             pe = _result(job, f"{slug} official PE")
@@ -272,14 +330,13 @@ def _refresh(cached, now, slot):
                 date, weights = snapshot
                 if date not in records[slug].get("estimates", {}):
                     snapshots[slug] = (date, weights)
-        stock_jobs = {date: pool.submit(_stock_valuations, date) for date in {s[0] for s in snapshots.values()}}
-        stock_values = {date: _result(job, f"Eastmoney stock valuations {date}") for date, job in stock_jobs.items()}
+        stock_jobs = {date: pool.submit(_stock_pb, date) for date in {s[0] for s in snapshots.values()}}
+        stock_values = {date: _result(job, f"Eastmoney stock PB {date}") for date, job in stock_jobs.items()}
     for slug, (date, weights) in snapshots.items():
         if values := stock_values.get(date):
-            estimates = {key: _estimate(weights, values, key) for key in ("pb", "ps")}
-            if any(estimates.values()):
-                records[slug].setdefault("estimates", {})[date] = estimates
-    return {"version": 2, "slot": slot, "records": records}
+            if pb := _estimate_pb(weights, values):
+                records[slug].setdefault("estimates", {})[date] = {"pb": pb}
+    return {**cached, "version": CACHE_VERSION, "slot": slot, "records": records}
 
 
 def load_index_valuations():
@@ -291,29 +348,39 @@ def load_index_valuations():
             cached = _load_payload(CACHE)
         except (FileNotFoundError, ValueError):
             cached = {}
-        if cached.get("version") != 2:
+        cache_version = cached.get("version")
+        changed = cache_version != CACHE_VERSION
+        if cache_version == 2:
+            cached.pop("hkSlot", None)
+            cached.pop("hkHistoryEtag", None)
+            for record in cached.get("records", {}).values():
+                record.pop("history", None)
+                record.pop("historySlot", None)
+        elif changed and cache_version != 3:
             cached = {"records": {
                 slug: {"official": entry["official"]}
                 for slug, entry in cached.get("records", {}).items() if "official" in entry
             }}
-        changed = cached.get("slot") != slot or "hstech" not in cached.get("records", {})
-        if changed:
+        if cache_version in (2, 3):
+            for record in cached.get("records", {}).values():
+                record.pop("psRows", None)
+                if "estimates" in record:
+                    record["estimates"] = {day: {"pb": values["pb"]}
+                                           for day, values in record["estimates"].items() if values.get("pb")}
+        cached["version"] = CACHE_VERSION
+        if cached.get("slot") != slot:
             cached = _refresh(cached, now, slot)
-        hk = cached["records"]["hstech"]
-        if hk.get("historySlot") != slot:
-            try:
-                hk["history"] = _hstech_history(hk.get("history", {}), now.date())
-            except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as error:
-                _LOG.warning("Hang Seng TECH valuation history: %s", error)
-            hk["historySlot"] = slot
+            changed = True
+        if cached.get("hkSlot") != slot or not HK_INDICES.keys() <= cached["records"].keys():
+            _refresh_hk(cached, now, slot)
             changed = True
         if changed:
             _atomic_json(cached, CACHE)
     return cached["records"]
 
 
-def _estimated_series(record, key):
-    observations = sorted((date, values[key]) for date, values in record.get("estimates", {}).items() if values[key])
+def _estimated_pb_series(record):
+    observations = sorted((date, values["pb"]) for date, values in record.get("estimates", {}).items() if values.get("pb"))
     if not observations:
         return {}, []
     date, latest = observations[-1]
@@ -330,51 +397,69 @@ def _estimated_series(record, key):
     return {**latest, "date": date, "pct": pct}, points
 
 
-def _weekly_valuation_percentiles(frame, column):
-    series = frame.set_index("date")[column]
+def _weekly_points(values):
+    weeks = {}
+    for day, value in sorted(values.items()):
+        weeks[date.fromisoformat(day).isocalendar()[:2]] = [day, value]
+    return list(weeks.values())
+
+
+def _weekly_valuation_percentiles(values):
+    dates = [pd.Timestamp(day) for day, _ in values]
+    ratios = [value for _, value in values]
     points = []
-    for end, value in series.items():
-        prior = series[(series.index < end) & (series.index >= end - pd.DateOffset(years=10))].dropna()
-        if len(prior) >= 52:
-            pct = round(float((prior < value).mean() * 100), 2) if pd.notna(value) else None
-            points.append([end.date().isoformat(), pct])
+    minimum = 52
+    window = pd.DateOffset(years=10)
+    for i in range(minimum, len(values)):
+        start = bisect_left(dates, dates[i] - window)
+        prior = [ratio for ratio in ratios[start:i] if ratio is not None]
+        day, value = values[i]
+        if len(prior) >= minimum:
+            pct = round(100 * sum(ratio < value for ratio in prior) / len(prior), 2) if value is not None else None
+            points.append([day, pct])
     return points
 
 
-def _hstech_entry(record, include_history):
+def _hk_entry(slug, record, include_history):
+    spec = HK_INDICES[slug]
     observations = [row for _, row in sorted(record.get("valuations", {}).items())]
-    latest = observations[-1] if observations else {}
-    date = latest.get("date")
     closes = record.get("closes", {})
     entry = {
-        "close": closes.get(date),
-        "pe": latest.get("pe"), "pePct": latest.get("pePct"), "peDate": date if latest.get("pe") is not None else None,
-        "pb": latest.get("pb"), "pbPct": latest.get("pbPct"), "pbDate": date if latest.get("pb") is not None else None,
-        "pbSource": "danjuan" if latest.get("pb") is not None else None,
-        "ps": None, "psPct": None, "psDate": None,
+        "indexSymbol": spec["symbol"], "etfCode": spec.get("etf"), "benchmark": spec.get("benchmark"),
     }
+    series = {metric: (rows, "balanced") for metric, rows in record.get("balancedRows", {}).items()}
+    official_pe = record.get("officialPe", {})
+    if any(value is not None for value in official_pe.values()):
+        series["pe"] = (official_pe, "csi")
+    close_latest = max(closes, default=None)
+    close_start = min(closes, default=None)
+    for metric in ("pe", "pb"):
+        rows, source = series.get(metric, ({}, None))
+        if rows and source == "balanced" and close_latest and slug in ("h30533", "hstech"):
+            rows = {day: value for day, value in rows.items()
+                    if day in closes or day < close_start or day > close_latest}
+        if rows:
+            values = _weekly_points(rows)
+            history = _weekly_valuation_percentiles(values)
+        else:
+            values = [[row["date"], row[metric]] for row in observations if row.get(metric) is not None]
+            history = [[row["date"], row[metric + "Pct"]] for row in observations if row.get(metric + "Pct") is not None]
+            source = "danjuan" if values else None
+        day, value = next(((day, value) for day, value in reversed(values) if value is not None), (None, None))
+        entry.update({metric: value, metric + "Date": day, metric + "Pct": dict(history).get(day),
+                      metric + "Source": source})
+        if include_history:
+            entry.update({metric + "Values": values, metric + "History": history, metric + "HistorySource": source})
+    pe_date = entry["peDate"]
+    close_date = pe_date if pe_date in closes else close_latest
+    entry.update(close=closes.get(close_date), closeDate=close_date)
     if include_history:
-        price_rows = [[day, value] for day, value in closes.items() if date is None or day <= date]
-        close_frame = pd.DataFrame(price_rows, columns=["date", "close"]).sort_values("date")
-        close_frame["date"] = pd.to_datetime(close_frame["date"])
         entry.update({
-            "start": latest.get("start"), "csiSource": HSTECH_SOURCE,
-            "peHistory": [[row["date"], row["pePct"]] for row in observations if row["pePct"] is not None],
-            "peValues": [[row["date"], row["pe"]] for row in observations if row["pe"] is not None],
-            "pbHistory": [[row["date"], row["pbPct"]] for row in observations if row["pbPct"] is not None],
-            "psHistory": [], "closeHistory": _date_rows(_weekly_series(close_frame, "close")),
-            "valuationHistorySource": "danjuan" if observations else None,
+            "start": entry["peValues"][0][0] if entry["peValues"] else None,
+            "csiSource": spec["source"], "snapshotSymbol": spec.get("snapshot"),
+            "closeHistory": [[day, round(value, 2)] for day, value in _weekly_points(closes)],
+            "valuationHistorySource": entry["peSource"],
         })
-        if rows := record.get("history", {}).get("rows"):
-            frame = pd.DataFrame(rows, columns=["date", "pe", "pb"])
-            frame["date"] = pd.to_datetime(frame["date"], format="%Y-%m-%d")
-            entry.update({
-                "valuationHistorySource": "investmentWorkbench",
-                "valuationHistoryStart": rows[0][0],
-                "peHistory": _weekly_valuation_percentiles(frame, "pe"),
-                "pbHistory": _weekly_valuation_percentiles(frame, "pb"),
-                "peValues": [[day, pe] for day, pe, _ in rows],
-            })
     return entry
 
 
@@ -386,8 +471,8 @@ def index_valuation_data(slug=None):
             continue
         record = raw.get(key, {})
         index = {"slug": key, "code": code, "name": name, "category": category}
-        if key == "hstech":
-            entries.append({**index, **_hstech_entry(record, slug is not None)})
+        if key in HK_INDICES:
+            entries.append({**index, **_hk_entry(key, record, slug is not None)})
             continue
         pe = record.get("official", {})
         date = pe.get("date")
@@ -397,8 +482,7 @@ def index_valuation_data(slug=None):
         if pb:
             pb_points = [[day, obs["pct"]] for day, obs in sorted(pb_history.items()) if obs["pct"] is not None]
         else:
-            pb, pb_points = _estimated_series(record, "pb")
-        ps, ps_points = _estimated_series(record, "ps")
+            pb, pb_points = _estimated_pb_series(record)
         entry = {
             **index,
             "peDate": date, "close": pe.get("close"),
@@ -406,13 +490,11 @@ def index_valuation_data(slug=None):
             "pb": pb.get("value"), "pbPct": pb.get("pct"), "pbDate": pb.get("date"),
             "pbSource": "danjuan" if pb_history else ("estimate" if pb else None),
             "pbCoverage": pb.get("coverage"),
-            "ps": ps.get("value"), "psPct": ps.get("pct"), "psDate": ps.get("date"),
-            "psCoverage": ps.get("coverage"),
         }
         if slug is not None:
             entry.update({
                 "start": pe.get("start"), "peHistory": pe_pct, "peValues": pe.get("values", []),
-                "closeHistory": pe.get("closes", []), "pbHistory": pb_points, "psHistory": ps_points,
+                "closeHistory": pe.get("closes", []), "pbHistory": pb_points,
                 "csiSource": f"https://www.csindex.com.cn/#/indices/family/detail?indexCode={code}",
             })
         entries.append(entry)

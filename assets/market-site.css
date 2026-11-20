@@ -82,7 +82,7 @@
 .iv-count,.iv-note,.iv-meta { color:var(--iv-muted); font-size:13px; }
 .iv-shell .iv-list-help { color:var(--iv-muted); font-size:13px; margin:12px 2px; }
 .iv-table-wrap { overflow:auto; }
-.iv-table { width:100%; min-width:780px; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+.iv-table { width:100%; min-width:640px; border-collapse:collapse; font-variant-numeric:tabular-nums; }
 .iv-table th { background:#eff4fb; text-align:left; padding:9px 10px; color:#405773; font-size:12px; white-space:nowrap; }
 .iv-table th:first-child,.iv-table td:first-child { padding-left:18px; }
 .iv-table th:last-child,.iv-table td:last-child { padding-right:18px; }
@@ -91,7 +91,7 @@
 .iv-table td { border-top:1px solid #e3ebf6; padding:9px 10px; white-space:nowrap; }
 .iv-table tbody tr:nth-child(even) { background:#fbfcfe; }
 .iv-table tbody tr:hover { background:#eef4fd; }
-.iv-table .iv-number,.iv-table :is(th[data-column="pe"],th[data-column="pb"],th[data-column="ps"]) { text-align:right; }
+.iv-table .iv-number,.iv-table :is(th[data-column="pe"],th[data-column="pb"]) { text-align:right; }
 .iv-index-link { color:var(--iv-blue); display:inline-flex; font-weight:750; text-decoration:none; }
 .iv-index-meta { display:flex; align-items:center; gap:7px; margin-top:2px; color:var(--iv-muted); font-size:11px; }
 .iv-category-chip { padding:0 6px; border-radius:9px; background:#e8effa; color:#274a79; font-size:10px; font-weight:700; }
@@ -116,7 +116,7 @@
 .iv-method { margin-top:16px; padding:14px 18px; }
 .iv-method summary { cursor:pointer; font-weight:700; }
 .iv-method p { margin-top:8px; max-width:90ch; }
-.iv-cards { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-bottom:16px; }
+.iv-cards { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-bottom:16px; }
 .iv-card { padding:15px 17px; box-shadow:inset 0 3px 0 var(--iv-series,#789bd4); }
 .iv-card h2 { font-size:15px; }
 .iv-card strong { font-variant-numeric:tabular-nums; font-size:30px; font-weight:750; line-height:1.2; }

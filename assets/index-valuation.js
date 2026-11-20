@@ -39,11 +39,11 @@ function methodology(csiSource, scope = "mainland") {
   const mainland = `<p class="iv-note"><a href="${csiSource}">中证指数官网</a>提供 A 股 PE-TTM 和日收盘点位。PE 分位以最近 2,430 个有效交易日为上限，
     至少 1,458 个观察值后计算。分位表示窗口内历史 PE 严格低于当前值的比例，走势图按周取样。</p>
     <p class="iv-note">A 股 PB 和 PB 分位优先使用<a href="https://danjuanfunds.com/article/337.html">雪球基金估值接口</a>。历史曲线从本地首次保存接口快照起累计。雪球未覆盖的指数使用估算 PB。</p>
-    <p class="iv-note">A 股 PS 为月末估算值。用<a href="${csiSource}">中证公布的完整成分权重</a>和<a href="https://data.eastmoney.com/gzfx/">东方财富同日个股估值</a>计算加权调和平均数。只使用有效正值，权重覆盖不足 95% 留空。
+    <p class="iv-note">月末 PB 估算使用<a href="${csiSource}">中证公布的成分权重</a>和<a href="https://data.eastmoney.com/gzfx/">东方财富同日个股 PB</a>计算加权调和平均数。使用有效正值，权重覆盖不足 95% 时留空。
     估算分位以最近十年的同口径月末样本计算，至少需要 72 期。</p>`;
-  const hongKong = `<p class="iv-note"><a href="https://www.hsi.com.hk/eng/indexes/all-indexes/hstech">恒生科技指数（HSTECH）</a>的列表与顶部估值卡片来自<a href="https://danjuanfunds.com/djapi/index_eva/detail/HKHSTECH">雪球基金</a>。收盘点位来自<a href="https://quote.eastmoney.com/gb/zsHSTECH.html">东方财富</a>。</p>
-    <p class="iv-note">PE、PB 历史曲线采用<a href="https://etf.whatsid.me/indices/valuation">投资工作台</a>公开的市值加权周频数据。分位是过去最多 10 年内严格低于当期估值的有效周样本比例，计算至少需要 52 个历史周样本。
-    两家估值源的计算口径和更新日期可能不同。暂无已核实的公开 PS 数据。</p>`;
+  const hongKong = `<p class="iv-note">港股及跨境主题按标的指数展示估值。ETF 代码用于标识跟踪产品。</p>
+    <p class="iv-note">周频分位表示过去最多 10 年内严格低于当期估值的有效周样本比例。PE、PB 至少需要 52 个历史周样本。
+    各指标的数据来源、日期和实际历史覆盖见指数详情。</p>`;
   return `<details class="iv-panel iv-method">
     <summary>估值口径与数据来源</summary>
     ${scope === "hongKong" ? "" : mainland}
@@ -55,7 +55,7 @@ function methodology(csiSource, scope = "mainland") {
 function renderList(indices) {
   const columns = [
     [null, "指数"], ["peDate", "数据日"], ["pe", "PE"], ["pePct", "PE 分位"],
-    ["pb", "PB"], ["pbPct", "PB 分位"], ["ps", "PS"], ["psPct", "PS 分位"],
+    ["pb", "PB"], ["pbPct", "PB 分位"],
     ["temperature", "PE 温度"]
   ];
   const categories = ["全部", "宽基", "行业", "港股", "风格"];
@@ -109,13 +109,11 @@ function renderList(indices) {
     }
     tableBody.innerHTML = visible.map(index => `<tr>
       <td><a class="iv-index-link" href="/index/${index.slug}/">${index.name}</a>
-        <div class="iv-index-meta"><span>${index.code}${index.category === "港股" ? " · HK" : ""}</span>
+        <div class="iv-index-meta"><span>${index.code}${index.etfCode ? ` · ETF ${index.etfCode}` : index.category === "港股" ? ` · ${index.indexSymbol || "HK"}` : ""}</span>
         <span class="iv-category-chip">${categoryNames[index.category] || index.category}</span></div></td>
-      <td>${index.peDate || "—"}${index.pbDate && index.pbDate !== index.peDate ? `<small>PB ${index.pbDate}</small>` : ""}
-        ${index.psDate && index.psDate !== index.peDate ? `<small>PS ${index.psDate}</small>` : ""}</td>
+      <td>${index.peDate || "—"}${index.pbDate && index.pbDate !== index.peDate ? `<small>PB ${index.pbDate}</small>` : ""}</td>
       <td class="iv-number">${number(index.pe)}</td><td>${rank(index.pePct)}</td>
       <td class="iv-number">${number(index.pb)}${index.pbSource === "estimate" ? "<small>估算</small>" : ""}</td><td>${rank(index.pbPct)}</td>
-      <td class="iv-number">${number(index.ps)}${index.ps == null ? "" : "<small>月末估算</small>"}</td><td>${rank(index.psPct)}</td>
       <td>${badge(index.pePct)}</td>
     </tr>`).join("");
     root.querySelector(".iv-count").textContent = `${categoryNames[category] || category} · ${visible.length} 个指数`;
@@ -146,33 +144,57 @@ function renderList(indices) {
 
 const metrics = [
   {key:"pe", label:"PE", name:"市盈率", color:"#2856ad"},
-  {key:"pb", label:"PB", name:"市净率", color:"#008374"},
-  {key:"ps", label:"PS", name:"市销率", color:"#a15d13"}
+  {key:"pb", label:"PB", name:"市净率", color:"#008374"}
 ];
+
+const metricSources = {danjuan:"雪球基金历史分位", csi:"中证指数估值分位", balanced:"平安数据周样本分位"};
 
 function renderDetail(index) {
   const hongKong = index.category === "港股";
-  let historyNote = "";
-  if (index.valuationHistorySource === "investmentWorkbench") {
-    historyNote = `<p class="iv-note">历史估值来自<a href="https://etf.whatsid.me/indices/valuation">投资工作台</a>的市值加权周频数据，样本始于 ${index.valuationHistoryStart}。顶部卡片显示雪球基金快照。</p>`;
-  } else if (index.valuationHistorySource === "danjuan") {
-    historyNote = '<p class="iv-note">历史接口暂未返回可用数据，图中估值来自本地已保存的雪球基金快照。</p>';
+  const notes = [];
+  const historySources = {PE:index.peHistorySource, PB:index.pbHistorySource};
+  const balanced = Object.keys(historySources).filter(key => historySources[key] === "balanced");
+  const savedSnapshots = Object.keys(historySources).filter(key => historySources[key] === "danjuan");
+  if (historySources.PE === "csi") {
+    notes.push(`PE 估值和收盘点位来自<a href="${index.csiSource}">中证指数</a>，走势图按周取样。`);
   }
+  if (balanced.length) {
+    notes.push(`${balanced.join("、")} 卡片与曲线使用<a href="https://xushilu.com/valuation">Balanced Portfolio</a>公开的平安估值数据。分位按可用周样本计算。`);
+  }
+  if (savedSnapshots.length) {
+    notes.push(`图中 ${savedSnapshots.join("、")} 来自本地已保存的雪球基金快照。`);
+  }
+  const snapshotCards = metrics.filter(metric => index[metric.key + "Source"] === "danjuan");
+  if (snapshotCards.length) {
+    notes.push(`顶部 ${snapshotCards.map(metric => metric.label).join("、")} 卡片使用<a href="https://danjuanfunds.com/djapi/index_eva/detail/${index.snapshotSymbol}">雪球基金</a>快照。`);
+  }
+  if (hongKong && historySources.PE !== "csi") {
+    const priceSources = {
+      hsi:['腾讯财经', 'https://gu.qq.com/hkHSI'],
+      hstech:['东方财富', 'https://quote.eastmoney.com/gb/zsHSTECH.html'],
+      h30533:['中证指数', index.csiSource]
+    };
+    const [label, url] = priceSources[index.slug] || [];
+    if (url) notes.push(`收盘点位来自<a href="${url}">${label}</a>。`);
+  }
+  const codeLabel = index.etfCode ? `标的指数 ${index.code} · ETF ${index.etfCode}` :
+    `${index.code}${index.indexSymbol ? ` · ${index.indexSymbol}` : ""}`;
   document.title = `${index.name}估值 · 市场先生`;
   root.innerHTML = `
     <div class="iv-back"><a class="iv-utility" href="/indices/">← 指数估值</a></div>
     <div class="iv-heading">
       <div><h1>${index.name}估值</h1>
-        <p>${index.code}${hongKong ? " · HSTECH" : ""} · ${index.category} · PE 数据日 ${index.peDate || "—"}
-        · 收盘点位 ${number(index.close)}${hongKong && index.start ? ` · 雪球分位样本自 ${index.start}` : ""}</p></div>
+        <p>${codeLabel} · ${index.category} · PE 数据日 ${index.peDate || "—"}
+        · 收盘点位 ${number(index.close)}${index.closeDate && index.closeDate !== index.peDate ? `（${index.closeDate}）` : ""}</p>
+        ${index.benchmark ? `<p>${index.benchmark}</p>` : ""}</div>
     </div>
     <div class="iv-cards">
       ${metrics.map(({key, label, name, color}) => `<article class="iv-panel iv-card" style="--iv-series:${color}">
         <h2>${label} · ${name}</h2>
         <div class="iv-metric"><span><strong>${number(index[key])}</strong>${index[key] == null ? "" : " 倍"}</span>
           ${badge(index[key + "Pct"])}</div>
-        <p class="iv-meta">${index[key] == null ? "暂无数据" :
-          index[key + "Pct"] == null ? "历史分位样本不足" : hongKong ? "雪球基金历史分位" : "近 10 年分位"}</p>
+        <p class="iv-meta">${index[key] == null ? "暂无数据" : index[key + "Pct"] == null ? "历史分位样本不足" :
+          hongKong ? metricSources[index[key + "Source"]] || "可用历史分位" : "近 10 年分位"}</p>
         ${index[key + "Pct"] == null ? "" : rank(index[key + "Pct"])}
         <p class="iv-meta">数据日 ${index[key + "Date"] || "—"}
         ${index[key + "Coverage"] == null ? "" : ` · 月末估算 · 权重覆盖 ${percent(index[key + "Coverage"])}`}</p>
@@ -183,7 +205,8 @@ function renderDetail(index) {
         <h2 id="chart-heading">估值分位走势</h2>
         <div class="iv-mode" role="group" aria-label="走势指标">
           <button type="button" data-mode="pct" aria-pressed="true">估值分位</button>
-          <button type="button" data-mode="value" aria-pressed="false">PE-TTM</button>
+          <button type="button" data-mode="peValue" aria-pressed="false">PE-TTM</button>
+          ${index.pbValues?.some(([, value]) => value != null) ? '<button type="button" data-mode="pbValue" aria-pressed="false">PB</button>' : ""}
         </div>
         <div class="iv-mode" role="group" aria-label="时间范围">
           ${[1, 3, 5, 10].map(years => `<button type="button" data-years="${years}"
@@ -196,7 +219,7 @@ function renderDetail(index) {
         <div class="iv-tooltip" aria-live="polite" hidden></div>
       </div>
       <p class="iv-note" id="chart-sample"></p>
-      ${historyNote}
+      ${notes.length ? `<p class="iv-note">${notes.join("")}</p>` : ""}
     </section>
     ${methodology(index.csiSource, hongKong ? "hongKong" : "mainland")}`;
   chart(index);
@@ -208,21 +231,25 @@ function chart(index) {
   const tooltip = root.querySelector(".iv-tooltip");
   const legend = root.querySelector(".iv-chart-legend");
   const sample = root.querySelector("#chart-sample");
-  const source = [index.peHistory, index.pbHistory, index.psHistory];
-  const colors = index.slug === "hstech" ? {pe:"#d32f2f", pb:"#2563eb", ps:"#b78200"} : {};
+  const source = [index.peHistory, index.pbHistory];
+  const colors = index.category === "港股" ? {pe:"#d32f2f", pb:"#2563eb"} : {};
   const pctLines = metrics.map((metric, i) => ({
     ...metric, color: colors[metric.key] ?? metric.color,
     label: metric.label + " 分位", points: source[i], format: percent
   }));
   const price = {key:"close", label:"收盘点位（右轴）", color:"#6b778d", points:index.closeHistory, format:number};
-  const pe = {key:"peValue", label:"PE-TTM", color:pctLines[0].color, points:index.peValues, format:v => number(v) + " 倍"};
-  const allDates = [...source, index.peValues, index.closeHistory].flatMap(points => points.map(([d]) => d));
+  const valueLines = pctLines.map((metric, i) => ({
+    key:metric.key + "Value", label:["PE-TTM", "PB"][i], color:metric.color,
+    points:index[metric.key + "Values"] || [], format:v => number(v) + " 倍"
+  }));
+  const allDates = [...source, ...valueLines.map(line => line.points), index.closeHistory].flatMap(points => points.map(([d]) => d));
   const latest = allDates.sort().at(-1);
   let mode = "pct";
   let years = 10;
   let selected = null;
   let view = null;
   const hidden = new Set(index.category === "港股" ? [] : ["close"]);
+  const options = () => [...(mode === "pct" ? pctLines : valueLines.filter(line => line.key === mode)), price];
 
   function clearSelection() {
     selected = null;
@@ -230,10 +257,9 @@ function chart(index) {
   }
 
   function buildLegend() {
-    const options = [...(mode === "pct" ? pctLines : [pe]), price];
-    legend.innerHTML = options.map(line =>
+    legend.innerHTML = options().map(line =>
       `<label style="--iv-series:${line.color}"><input type="checkbox" data-line="${line.key}"
-      ${line.points.length && !hidden.has(line.key) ? "checked" : ""} ${line.points.length ? "" : "disabled"}>${line.label}</label>`).join("");
+      ${line.points.length && !hidden.has(line.key) ? "checked" : ""} ${line.points.length ? "" : 'disabled title="暂无历史数据"'}>${line.label}</label>`).join("");
     legend.querySelectorAll("input").forEach(input => {
       input.addEventListener("change", () => {
         if (input.checked) hidden.delete(input.dataset.line);
@@ -257,7 +283,7 @@ function chart(index) {
     cutoffDate.setUTCFullYear(cutoffDate.getUTCFullYear() - years);
     const cutoff = cutoffDate.toISOString().slice(0,10);
     const left = 44, top = 13, right = width - (hidden.has("close") ? 16 : 53), bottom = height - 30;
-    const lines = [...(mode === "pct" ? pctLines : [pe]), price]
+    const lines = options()
       .filter(line => !hidden.has(line.key))
       .map(line => {
         const points = line.points.filter(([date]) => date >= cutoff);
@@ -275,9 +301,11 @@ function chart(index) {
     const first = dates[0], last = dates.at(-1);
     const start = Date.parse(first), span = Date.parse(last) - start;
     const x = date => span ? left + (Date.parse(date) - start) / span * (right - left) : (left + right) / 2;
-    const peValues = [...(lines.find(line => line.key === "peValue")?.byDate.values() || [])];
-    const low = peValues.length ? Math.floor(Math.min(...peValues)) : 0;
-    const high = peValues.length ? Math.max(low + 1, Math.ceil(Math.max(...peValues))) : 100;
+    const ratios = [...(lines.find(line => line.key === mode)?.byDate.values() || [])];
+    const axisDigits = ratios.length && Math.max(...ratios) - Math.min(...ratios) < 4 ? 2 : 0;
+    const precision = axisDigits ? 10 : 1;
+    const low = ratios.length ? Math.floor(Math.min(...ratios) * precision) / precision : 0;
+    const high = ratios.length ? Math.max(low + 1 / precision, Math.ceil(Math.max(...ratios) * precision) / precision) : 100;
     const closes = lines.find(line => line.key === "close")?.points.map(([,v]) => v) || [];
     const closeLow = closes.length ? Math.floor(Math.min(...closes)) : 0;
     const closeHigh = closes.length ? Math.max(closeLow + 1, Math.ceil(Math.max(...closes))) : 1;
@@ -296,7 +324,7 @@ function chart(index) {
       context.strokeStyle = mode === "pct" && (tick === 1 || tick === 4) ? "#b4c8e4" : "#e6edf6";
       context.stroke();
       context.textAlign = "right";
-      context.fillText(number(low + share * (high - low), 0) + (mode === "pct" ? "%" : ""), left - 6, row + 4);
+      context.fillText(number(low + share * (high - low), axisDigits) + (mode === "pct" ? "%" : ""), left - 6, row + 4);
       if (closes.length) {
         context.textAlign = "left";
         context.fillText(number(closeLow + share * (closeHigh - closeLow), 0), right + 6, row + 4);
@@ -397,7 +425,8 @@ function chart(index) {
     button.addEventListener("click", () => {
       if (button.dataset.mode) {
         mode = button.dataset.mode;
-        root.querySelector("#chart-heading").textContent = mode === "pct" ? "估值分位走势" : "市盈率走势";
+        root.querySelector("#chart-heading").textContent = mode === "pct" ? "估值分位走势" :
+          `${valueLines.find(line => line.key === mode).label} 走势`;
         buildLegend();
       } else years = Number(button.dataset.years);
       button.parentElement.querySelectorAll("button").forEach(tab =>
