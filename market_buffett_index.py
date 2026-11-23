@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
 from datetime import datetime
 import html
 import json
@@ -217,19 +218,19 @@ def _estimate_current_month_row(
     }
 
 
-def buffett_zone(value: float) -> tuple[str, str, str]:
-    """根据巴菲特指数历史经验区间返回状态标签、文字色与浅底色。"""
-    if pd.isna(value):
+def buffett_zone(pct_10y: float) -> tuple[str, str, str]:
+    """根据巴菲特指数近10年滚动历史分位（0~100）返回状态标签、文字色与浅底色（绿-黄绿-黄-浅红-红）。"""
+    if pd.isna(pct_10y):
         return "暂无", "#64748b", "#f1f5f9"
-    if value < 55:
-        return "显著偏低", "#087f5b", "#e6f7f1"
-    if value < 70:
-        return "偏低区间", "#2b8a57", "#edf8f2"
-    if value < 85:
-        return "合理区间", "#b47b00", "#fff7e0"
-    if value < 100:
-        return "偏高区间", "#ea580c", "#fff1e6"
-    return "高位警示", "#b42318", "#fde8e8"
+    if pct_10y < 20:
+        return "显著偏低", "#047857", "#d1fae5"
+    if pct_10y < 40:
+        return "偏低区间", "#4d7c0f", "#d9f99d"
+    if pct_10y < 60:
+        return "合理区间", "#b45309", "#fde68a"
+    if pct_10y < 80:
+        return "偏高区间", "#e11d48", "#ffe4e6"
+    return "高位警示", "#b91c1c", "#fecaca"
 
 
 def calculate_buffett_history(
@@ -262,6 +263,27 @@ def calculate_buffett_history(
 
     frame["buffett_index_pct"] = frame["total_mcap_yi"] / frame["gdp_ttm_yi"] * 100.0
 
+    # 逐期计算近10年滚动历史分位及五档分位带阈值（仅使用截至当期的历史数据，无未来函数）
+    dates_list = frame["date"].tolist()
+    vals_arr = frame["buffett_index_pct"].to_numpy(dtype=float)
+    pct_10y_series = []
+    q20_series, q40_series, q60_series, q80_series = [], [], [], []
+    for i, cur_date in enumerate(dates_list):
+        cutoff = cur_date - pd.DateOffset(years=10)
+        start_idx = bisect_left(dates_list, cutoff)
+        window = vals_arr[start_idx : i + 1]
+        pct_10y_series.append(float((window <= vals_arr[i]).mean() * 100.0))
+        q20, q40, q60, q80 = np.quantile(window, [0.2, 0.4, 0.6, 0.8])
+        q20_series.append(float(q20))
+        q40_series.append(float(q40))
+        q60_series.append(float(q60))
+        q80_series.append(float(q80))
+    frame["pct_10y"] = pct_10y_series
+    frame["q20_10y"] = q20_series
+    frame["q40_10y"] = q40_series
+    frame["q60_10y"] = q60_series
+    frame["q80_10y"] = q80_series
+
     # 年度年末对比表（2008 年至最新完整年度 + 当前最新年）
     frame["year"] = frame["date"].dt.year
     annual = (
@@ -275,9 +297,7 @@ def calculate_buffett_history(
     latest_val = float(latest["buffett_index_pct"])
 
     all_pct = float((frame["buffett_index_pct"] <= latest_val).mean() * 100.0)
-    cutoff_10y = latest["date"] - pd.DateOffset(years=10)
-    sub_10y = frame[frame["date"] >= cutoff_10y]
-    pct_10y = float((sub_10y["buffett_index_pct"] <= latest_val).mean() * 100.0)
+    pct_10y = float(latest["pct_10y"])
 
     max_row = frame.loc[frame["buffett_index_pct"].idxmax()]
     min_row = frame.loc[frame["buffett_index_pct"].idxmin()]
@@ -317,6 +337,7 @@ def save_history_csv(frame: pd.DataFrame, output_csv: Path = DEFAULT_HISTORY_CSV
             "total_mcap_yi",
             "gdp_ttm_yi",
             "buffett_index_pct",
+            "pct_10y",
             "hs300_close",
             "is_estimate",
         ]
@@ -324,6 +345,7 @@ def save_history_csv(frame: pd.DataFrame, output_csv: Path = DEFAULT_HISTORY_CSV
     out["date"] = out["date"].dt.strftime("%Y-%m-%d")
     for col in ("sh_mcap_yi", "sz_mcap_yi", "total_mcap_yi", "gdp_ttm_yi", "buffett_index_pct", "hs300_close"):
         out[col] = pd.to_numeric(out[col], errors="coerce").round(2)
+    out["pct_10y"] = pd.to_numeric(out["pct_10y"], errors="coerce").round(1)
     out.to_csv(output_csv, index=False, encoding="utf-8-sig")
 
 
@@ -398,6 +420,7 @@ BUFFETT_SCRIPT = r"""<script>
     var leftMin=0,leftMax=140,rightMin=0,rightMax=6000;
 
     var crosshair=svg.querySelector("[data-crosshair]");
+    var bandsGroup=svg.querySelector("[data-zone-bands]");
     var datesGroup=svg.querySelector("[data-dates]");
     var extremaGroup=svg.querySelector("[data-extrema]");
     var lyEls=[0,1,2,3,4].map(function(i){return svg.querySelector('[data-ly="'+i+'"]')});
@@ -431,6 +454,53 @@ BUFFETT_SCRIPT = r"""<script>
         cmds.push((cmds.length?"L":"M")+xFor(i).toFixed(1)+","+yFn(v).toFixed(1));
       }
       return cmds.join(" ");
+    }
+
+    function renderZoneBands(i0,i1){
+      if(!bandsGroup)return;
+      bandsGroup.textContent="";
+      if(!visible.bands||!payload.q20||!payload.q40||!payload.q60||!payload.q80)return;
+      var yTop=T,yBot=H-B;
+      function yClamped(v){return clamp(yLeft(v),yTop,yBot)}
+      function buildRibbon(upperFn,lowerFn,fill,opacity){
+        var pts=[];
+        for(var i=i0;i<=i1;i++){
+          pts.push(xFor(i).toFixed(1)+","+upperFn(i).toFixed(1));
+        }
+        for(var j=i1;j>=i0;j--){
+          pts.push(xFor(j).toFixed(1)+","+lowerFn(j).toFixed(1));
+        }
+        if(pts.length<4)return;
+        var poly=document.createElementNS(SVG_NS,"polygon");
+        poly.setAttribute("points",pts.join(" "));
+        poly.setAttribute("fill",fill);
+        poly.setAttribute("fill-opacity",String(opacity));
+        bandsGroup.appendChild(poly);
+      }
+      // 五档滚动分位背景：红(>=80%) -> 浅红(60-80%) -> 暖黄(40-60%) -> 黄绿(20-40%) -> 翠绿(<20%)
+      buildRibbon(function(){return yTop},function(i){return yClamped(payload.q80[i])},"#dc2626",0.22);
+      buildRibbon(function(i){return yClamped(payload.q80[i])},function(i){return yClamped(payload.q60[i])},"#fb7185",0.13);
+      buildRibbon(function(i){return yClamped(payload.q60[i])},function(i){return yClamped(payload.q40[i])},"#f59e0b",0.20);
+      buildRibbon(function(i){return yClamped(payload.q40[i])},function(i){return yClamped(payload.q20[i])},"#84cc16",0.22);
+      buildRibbon(function(i){return yClamped(payload.q20[i])},function(){return yBot},"#10b981",0.22);
+      // 柔和分界线增强相邻区间辨识度（尤其是 40% 黄/黄绿 交界）
+      [
+        {arr:payload.q80,stroke:"#dc2626"},
+        {arr:payload.q60,stroke:"#d97706"},
+        {arr:payload.q40,stroke:"#65a30d"},
+        {arr:payload.q20,stroke:"#059669"}
+      ].forEach(function(b){
+        var d=buildPath(b.arr,i0,i1,yClamped);
+        if(!d)return;
+        var p=document.createElementNS(SVG_NS,"path");
+        p.setAttribute("d",d);
+        p.setAttribute("fill","none");
+        p.setAttribute("stroke",b.stroke);
+        p.setAttribute("stroke-width","1");
+        p.setAttribute("stroke-opacity","0.35");
+        p.setAttribute("stroke-dasharray","3 3");
+        bandsGroup.appendChild(p);
+      });
     }
 
     function setRefLine(lineEl,textEl,val,label){
@@ -495,6 +565,7 @@ BUFFETT_SCRIPT = r"""<script>
         if(lyEls[k])lyEls[k].textContent=fmt(leftMax-(leftMax-leftMin)*f,0)+"%";
         if(ryEls[k])ryEls[k].textContent=Math.round(rightMax-(rightMax-rightMin)*f).toLocaleString("zh-CN");
       }
+      renderZoneBands(i0,i1);
       slice.sort(function(a,b){return a-b});
       setRefLine(p80Line,p80Text,quantile(slice,0.8),"80%分位");
       setRefLine(p50Line,p50Text,quantile(slice,0.5),"中位数");
@@ -538,8 +609,18 @@ BUFFETT_SCRIPT = r"""<script>
       var idx=clamp(Math.round(viewStart+clamp((sx-L)/PW,0,1)*(viewEnd-viewStart)),0,maxIndex);
       if(crosshair){var x=xFor(idx).toFixed(1);crosshair.setAttribute("x1",x);crosshair.setAttribute("x2",x);crosshair.removeAttribute("hidden")}
       var dLabel=payload.est[idx]?dates[idx]+" (当月估算)":dates[idx].slice(0,7);
+      var pctVal=payload.pct10y?payload.pct10y[idx]:null;
+      var zLabel="--",zColor="#475569";
+      if(pctVal!==null&&pctVal!==undefined&&!isNaN(pctVal)){
+        if(pctVal<20){zLabel="显著偏低";zColor="#15803d"}
+        else if(pctVal<40){zLabel="偏低区间";zColor="#4d7c0f"}
+        else if(pctVal<60){zLabel="合理区间";zColor="#b47b00"}
+        else if(pctVal<80){zLabel="偏高区间";zColor="#e11d48"}
+        else{zLabel="高位警示";zColor="#b91c1c"}
+      }
       var rows=[
         {name:"巴菲特指数 (总市值/GDP)",color:"#2563eb",value:fmt(payload.buffett[idx],2)+"%",valueColor:"#2563eb"},
+        {name:"近10年滚动分位",color:zColor,value:fmt(pctVal,1)+"% · "+zLabel,valueColor:zColor},
         {name:"沪深股票总市值",color:"#0d9488",value:fmt(payload.mcap[idx]/10000,2)+" 万亿元"},
         {name:"滚动4季度GDP (TTM)",color:"#f59e0b",value:fmt(payload.gdp[idx]/10000,2)+" 万亿元"},
         {name:"沪深300收盘",color:"#dc2626",value:fmt(payload.hs300[idx],2)+" 点"}
@@ -663,12 +744,13 @@ def render_buffett_page(
     output_html: Path = DEFAULT_OUTPUT_HTML,
 ) -> None:
     """渲染独立单文件中国巴菲特指数页面。"""
-    zone_label, zone_color, zone_bg = buffett_zone(meta["buffett_index_pct"])
+    zone_label, zone_color, zone_bg = buffett_zone(meta["pct_10y"])
     annual_svg = _build_annual_bars_svg(annual)
 
     recent_rows = []
     for _, row in frame.tail(12).iloc[::-1].iterrows():
-        lbl, clr, bg = buffett_zone(float(row["buffett_index_pct"]))
+        pct_val = float(row["pct_10y"])
+        lbl, clr, bg = buffett_zone(pct_val)
         d_text = (
             f"{row['date']:%Y-%m-%d} (当月估算)"
             if row["is_estimate"]
@@ -679,6 +761,7 @@ def render_buffett_page(
             f'<tr>'
             f'<td>{d_text}</td>'
             f'<td class="num"><strong style="color:{clr}">{row["buffett_index_pct"]:.2f}%</strong></td>'
+            f'<td class="num">{pct_val:.1f}%</td>'
             f'<td><span class="bf-badge" style="color:{clr};background:{bg}">{lbl}</span></td>'
             f'<td class="num">{row["total_mcap_yi"] / 1e4:.2f} 万亿</td>'
             f'<td class="num">{row["sh_mcap_yi"] / 1e4:.2f} 万亿</td>'
@@ -692,6 +775,11 @@ def render_buffett_page(
         {
             "dates": [d.strftime("%Y-%m-%d") for d in frame["date"]],
             "buffett": [round(float(v), 2) for v in frame["buffett_index_pct"]],
+            "pct10y": [round(float(v), 1) for v in frame["pct_10y"]],
+            "q20": [round(float(v), 2) for v in frame["q20_10y"]],
+            "q40": [round(float(v), 2) for v in frame["q40_10y"]],
+            "q60": [round(float(v), 2) for v in frame["q60_10y"]],
+            "q80": [round(float(v), 2) for v in frame["q80_10y"]],
             "mcap": [round(float(v), 2) for v in frame["total_mcap_yi"]],
             "gdp": [round(float(v), 2) for v in frame["gdp_ttm_yi"]],
             "hs300": [round(float(v), 2) if pd.notna(v) else None for v in frame["hs300_close"]],
@@ -792,9 +880,18 @@ th{{color:#68778d;font-weight:500}}td.num,th.num{{text-align:right;font-variant-
   <div class="bf-toolbar" style="margin-bottom:8px">
     <button type="button" class="bf-chip" data-series-toggle="main" aria-pressed="true"><i style="background:#2563eb"></i>沪深总市值 / GDP（左轴，最新 {meta["buffett_index_pct"]:.2f}%）</button>
     <button type="button" class="bf-chip" data-series-toggle="index" aria-pressed="true"><i style="background:#dc2626"></i>沪深300指数（右轴）</button>
-    <button type="button" class="bf-chip" data-series-toggle="bands" aria-pressed="true"><i style="background:#94a3b8"></i>区间 80% / 中位 / 20% 参考线</button>
+    <button type="button" class="bf-chip" data-series-toggle="bands" aria-pressed="true"><i style="background:#94a3b8"></i>近10年五档分位背景 &amp; 参考线</button>
+    <span style="display:inline-flex;align-items:center;gap:8px;font-size:11px;color:#475569;margin-left:auto;flex-wrap:wrap">
+      <span style="display:inline-flex;align-items:center;gap:3px"><i style="width:10px;height:10px;border-radius:2px;background:rgba(220,38,38,.42);display:inline-block"></i>高位警示 ≥80%</span>
+      <span style="display:inline-flex;align-items:center;gap:3px"><i style="width:10px;height:10px;border-radius:2px;background:rgba(251,113,133,.32);display:inline-block"></i>偏高 60–80%</span>
+      <span style="display:inline-flex;align-items:center;gap:3px"><i style="width:10px;height:10px;border-radius:2px;background:rgba(245,158,11,.42);display:inline-block"></i>合理 40–60%</span>
+      <span style="display:inline-flex;align-items:center;gap:3px"><i style="width:10px;height:10px;border-radius:2px;background:rgba(132,204,22,.48);display:inline-block"></i>偏低 20–40%</span>
+      <span style="display:inline-flex;align-items:center;gap:3px"><i style="width:10px;height:10px;border-radius:2px;background:rgba(16,185,129,.45);display:inline-block"></i>显著偏低 &lt;20%</span>
+    </span>
   </div>
   <svg id="bf-main-svg" class="bf-svg" viewBox="0 0 1080 410">
+    <defs><clipPath id="bf-plot-clip"><rect x="62" y="26" width="954" height="342"/></clipPath></defs>
+    <g data-zone-bands clip-path="url(#bf-plot-clip)"></g>
     <line class="bf-axis" x1="62" y1="26" x2="1016" y2="26"/><line class="bf-axis" x1="62" y1="111.5" x2="1016" y2="111.5"/><line class="bf-axis" x1="62" y1="197" x2="1016" y2="197"/><line class="bf-axis" x1="62" y1="282.5" x2="1016" y2="282.5"/><line class="bf-axis" x1="62" y1="368" x2="1016" y2="368"/>
     <text x="54" y="30" text-anchor="end" data-ly="0"></text><text x="54" y="115" text-anchor="end" data-ly="1"></text><text x="54" y="201" text-anchor="end" data-ly="2"></text><text x="54" y="286" text-anchor="end" data-ly="3"></text><text x="54" y="372" text-anchor="end" data-ly="4"></text>
     <text x="1024" y="30" data-ry="0"></text><text x="1024" y="115" data-ry="1"></text><text x="1024" y="201" data-ry="2"></text><text x="1024" y="286" data-ry="3"></text><text x="1024" y="372" data-ry="4"></text>
@@ -825,7 +922,7 @@ th{{color:#68778d;font-weight:500}}td.num,th.num{{text-align:right;font-variant-
 <section>
   <div class="bf-section-head"><h2>三、最近 12 期巴菲特指数明细</h2><small>按时间倒序排列</small></div>
   <table>
-    <thead><tr><th>统计期</th><th class="num">巴菲特指数</th><th>历史区间</th><th class="num">沪深总市值</th><th class="num">上交所总市值</th><th class="num">深交所总市值</th><th class="num">滚动4季GDP</th><th class="num">沪深300</th></tr></thead>
+    <thead><tr><th>统计期</th><th class="num">巴菲特指数</th><th class="num">近10年分位</th><th>历史区间</th><th class="num">沪深总市值</th><th class="num">上交所总市值</th><th class="num">深交所总市值</th><th class="num">滚动4季GDP</th><th class="num">沪深300</th></tr></thead>
     <tbody>{''.join(recent_rows)}</tbody>
   </table>
 </section>
@@ -838,7 +935,7 @@ th{{color:#68778d;font-weight:500}}td.num,th.num{{text-align:right;font-variant-
   <ul class="bf-list">
     <li><strong>指标起源：</strong>2001 年 12 月，沃伦·巴菲特在《财富》杂志发表《巴菲特论股票市场》一文，指出“所有公开交易股票总市值与国民生产总值（GNP）的比率，可能是衡量任何时刻股市估值水平的最佳单一指标”。在美股历史上，该比率在 1975 年熊市附近约 75%，2000 年互联网泡沫高点达 183%，2007 年次贷危机前约 135%，2009 年底部回落至 50% 附近。</li>
     <li><strong>GDP 与 GNP 的区别：</strong>由于中国宏观数据以国内生产总值（GDP）定期披露为主，A 股巴菲特指数普遍用 GDP 替代 GNP。<strong>GDP</strong> 是地域概念（一国境内生产的全部最终产品与服务价值），<strong>GNP</strong> 是国民概念（<code>GNP = GDP + 本国公民在国外创造的价值 − 外国公民在本国创造的价值</code>），两者在中国体量接近。</li>
-    <li><strong>如何正确看待中国巴菲特指数：</strong>随着注册制推进、新股持续上市以及产业证券化率提升，A 股总市值/GDP 的长期中枢呈缓慢上移趋势，因此观察时应重点结合<strong>近 10 年历史分位</strong>、估值（PE-TTM）与股债利差综合判断，切忌机械套用美股绝对阈值。</li>
+    <li><strong>如何正确看待中国巴菲特指数：</strong>随着注册制推进、新股持续上市以及产业证券化率提升，A 股总市值/GDP 的长期中枢呈缓慢上移趋势，因此本页「历史区间」按<strong>近 10 年滚动分位</strong>（无未来函数）划分为五档：<code>&lt;20%</code> 显著偏低、<code>20%–40%</code> 偏低区间、<code>40%–60%</code> 合理区间、<code>60%–80%</code> 偏高区间、<code>≥80%</code> 高位警示，并与估值（PE-TTM）及股债利差口径保持一致，避免机械套用固定绝对阈值。</li>
     <li><strong>数据来源：</strong>沪深两市月度股票市价总值来自东方财富全国股票交易统计表（<code>RPT_ECONOMY_STOCK_STATISTICS</code>，源自交易所与证监会统计），中国季度 GDP 来自东方财富宏观数据表（<code>RPT_ECONOMY_GDP</code>，源自国家统计局），当月未公布月末数据时按中证全指涨跌幅同步估算；本页仅作历史数据观察，不构成投资建议。</li>
   </ul>
 </section>

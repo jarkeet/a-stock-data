@@ -2260,17 +2260,13 @@ def _buffett_entry_banner(history_file="market_buffett_index_history.csv") -> st
                 val = float(row["buffett_index_pct"])
                 cutoff = row["date"] - pd.DateOffset(years=10)
                 sub10 = bf[bf["date"] >= cutoff]
-                pct10 = float((sub10["buffett_index_pct"] <= val).mean() * 100.0)
-                if val < 55:
-                    state, color, bg = "显著偏低", "#087f5b", "#e6f7f1"
-                elif val < 70:
-                    state, color, bg = "偏低区间", "#2b8a57", "#edf8f2"
-                elif val < 85:
-                    state, color, bg = "合理区间", "#b47b00", "#fff7e0"
-                elif val < 100:
-                    state, color, bg = "偏高区间", "#ea580c", "#fff1e6"
-                else:
-                    state, color, bg = "高位警示", "#b42318", "#fde8e8"
+                pct10 = (
+                    float(row["pct_10y"])
+                    if "pct_10y" in bf.columns and pd.notna(row["pct_10y"])
+                    else float((sub10["buffett_index_pct"] <= val).mean() * 100.0)
+                )
+                from market_buffett_index import buffett_zone
+                state, color, bg = buffett_zone(pct10)
                 pct_style = _pct_pill_style(pct10, high_is_green=False)
                 mcap_w = float(row["total_mcap_yi"]) / 1e4
                 gdp_w = float(row["gdp_ttm_yi"]) / 1e4

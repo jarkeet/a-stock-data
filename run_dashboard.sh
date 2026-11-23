@@ -10,7 +10,9 @@ pause_on_error() {
     exit 1
 }
 
-if command -v python3 >/dev/null 2>&1; then
+if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
     PYTHON_BIN="python3"
 elif command -v python >/dev/null 2>&1; then
     PYTHON_BIN="python"
@@ -18,14 +20,15 @@ else
     pause_on_error "未找到 Python 3。请先安装 python3。"
 fi
 
-if ! "$PYTHON_BIN" -c "import pandas, requests" >/dev/null 2>&1; then
-    pause_on_error "缺少依赖，请执行：$PYTHON_BIN -m pip install pandas requests"
+if ! "$PYTHON_BIN" -c "import numpy, pandas, requests" >/dev/null 2>&1; then
+    pause_on_error "缺少依赖，请执行：$PYTHON_BIN -m pip install numpy pandas requests openpyxl xlrd"
 fi
 
 DASHBOARD_PATH="$SCRIPT_DIR/market_sentiment_dashboard.html"
+TURNOVER_PATH="$SCRIPT_DIR/hs_a_share_turnover.csv"
 DAILY_PATH="$SCRIPT_DIR/market_sentiment_daily.csv"
 MARGIN_PATH="$SCRIPT_DIR/market_margin_balance.csv"
-DASHBOARD_PORT=8765
+DASHBOARD_PORT="${DASHBOARD_PORT:-8765}"
 DASHBOARD_BASE_URL="http://127.0.0.1:${DASHBOARD_PORT}/"
 DASHBOARD_URL="$DASHBOARD_BASE_URL"
 SERVER_INSTANCE_TOKEN="dashboard-$$-$(date +%s)"
@@ -52,7 +55,12 @@ open_dashboard() {
         # Chromium opens a command-line URL in a new tab unless --same-tab is used.
         nohup "$chrome_bin" "$target" >/dev/null 2>&1 &
     elif command -v open >/dev/null 2>&1; then
-        nohup open -a "Google Chrome" "$target" >/dev/null 2>&1 &
+        if [[ -d "/Applications/Google Chrome.app" ]]; then
+            nohup open -a "Google Chrome" "$target" >/dev/null 2>&1 &
+        else
+            printf '未检测到 Chrome，改用系统默认浏览器。\n'
+            nohup open "$target" >/dev/null 2>&1 &
+        fi
     elif command -v xdg-open >/dev/null 2>&1; then
         printf '未检测到 Chrome，改用系统默认浏览器。\n'
         nohup xdg-open "$target" >/dev/null 2>&1 &
@@ -69,19 +77,63 @@ open_dashboard() {
     fi
 }
 
+if [[ ! -f "$TURNOVER_PATH" ]]; then
+    printf '首次运行，正在初始化沪深A股日成交额缓存...\n'
+    "$PYTHON_BIN" -c "import pandas as pd; from market_turnover_sentiment import hs_a_share_turnover; hs_a_share_turnover((pd.Timestamp.today() - pd.Timedelta(days=365)).strftime('%Y-%m-%d'), cache_path='$TURNOVER_PATH')"
+fi
+
 printf '正在刷新近两年沪深两市融资余额...\n'
 "$PYTHON_BIN" market_capital_risk_appetite.py \
-    --turnover hs_a_share_turnover.csv \
+    --turnover "$TURNOVER_PATH" \
     --output "$DAILY_PATH" \
     --margin-output "$MARGIN_PATH"
 
+printf '正在刷新恐惧贪婪指数...\n'
+"$PYTHON_BIN" market_fear_greed.py || printf '警告：恐惧贪婪指数刷新失败，将沿用已有缓存。\n' >&2
+
+printf '正在刷新沪深300/中证500股债利差...\n'
+"$PYTHON_BIN" market_hs300_equity_bond.py || printf '警告：股债利差刷新失败，将沿用已有缓存。\n' >&2
+
+printf '正在刷新中国巴菲特指数...\n'
+"$PYTHON_BIN" market_buffett_index.py || printf '警告：巴菲特指数刷新失败，将沿用已有缓存。\n' >&2
+
 printf '正在生成市场情绪仪表盘...\n'
 "$PYTHON_BIN" market_sentiment_dashboard.py \
-    --turnover hs_a_share_turnover.csv \
+    --turnover "$TURNOVER_PATH" \
     --extra "$DAILY_PATH" \
     --intraday market_sentiment_intraday.csv \
     --margin "$MARGIN_PATH" \
     --output "$DASHBOARD_PATH"
+
+release_existing_dashboard_server() {
+    if ! command -v lsof >/dev/null 2>&1; then
+        return 0
+    fi
+    local pids=""
+    pids="$(lsof -tiTCP:"$DASHBOARD_PORT" -sTCP:LISTEN 2>/dev/null || true)"
+    if [[ -z "$pids" ]]; then
+        return 0
+    fi
+    local pid="" cmd=""
+    for pid in $pids; do
+        cmd="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+        if [[ "$cmd" == *"market_watchlist_server.py"* ]]; then
+            printf '检测到旧的仪表盘服务（PID %s）占用端口 %s，正在关闭...\n' "$pid" "$DASHBOARD_PORT"
+            kill "$pid" 2>/dev/null || true
+        else
+            pause_on_error "端口 ${DASHBOARD_PORT} 已被其他进程占用（PID ${pid}: ${cmd:-unknown}）。请先释放端口，或改用 DASHBOARD_PORT=8766 ./run_dashboard.sh"
+        fi
+    done
+    for _ in {1..15}; do
+        if [[ -z "$(lsof -tiTCP:"$DASHBOARD_PORT" -sTCP:LISTEN 2>/dev/null || true)" ]]; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    pause_on_error "旧的仪表盘服务未能及时释放端口 ${DASHBOARD_PORT}，请手动结束后重试。"
+}
+
+release_existing_dashboard_server
 
 "$PYTHON_BIN" market_watchlist_server.py \
     --dashboard "$DASHBOARD_PATH" --port "$DASHBOARD_PORT" \
