@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import html
 import json
 from pathlib import Path
 import random
+import threading
 import time
 
 import numpy as np
@@ -34,9 +36,9 @@ SHORT_COMPONENTS = [
     ("vol_score", "波动率", 25, "20日年化波动率（反向：波动越大越恐慌）"),
     ("turnover_score", "相对换手率", 20, "五宽基成交量相对60日均量的活跃度"),
     ("margin_score", "融资融券", 20, "沪深两市融资余额20日变动率与净加仓强度"),
-    ("breadth_score", "市场宽度", 15, "全市场上涨家数占比分布（近一年精确全市场）"),
+    ("breadth_score", "市场宽度", 15, "全市场上涨家数占比分布（全A真实日频）"),
     ("rsi_score", "RSI", 10, "五宽基14日RSI中位数的短期价格动能"),
-    ("limit_score", "涨跌停比", 10, "全市场涨停与跌停家数强弱对比（近一年精确全市场）"),
+    ("limit_score", "涨跌停比", 10, "全市场涨停与跌停家数强弱对比（全A真实日频）"),
 ]
 
 FETCH_START_DATE = "2013-01-01"
@@ -46,8 +48,11 @@ PERCENTILE_10Y_WINDOW = 2520
 
 DEFAULT_INDEX_CACHE = Path("market_fear_greed_index_cache.csv")
 DEFAULT_MARGIN_CACHE = Path("market_fear_greed_margin_cache.csv")
+DEFAULT_BREADTH_HISTORY_CACHE = Path("market_fear_greed_breadth_history.csv")
+DEFAULT_UNIVERSE_CACHE = Path("market_stock_universe.csv")
 DEFAULT_CSI_ALL_CACHE = Path("market_valuation_csi_all.csv")
 DEFAULT_SENTIMENT_DAILY = Path("market_sentiment_daily.csv")
+DEFAULT_SENTIMENT_INTRADAY = Path("market_sentiment_intraday.csv")
 DEFAULT_HISTORY_CSV = Path("market_fear_greed_history.csv")
 DEFAULT_OUTPUT_HTML = Path("market_fear_greed.html")
 
@@ -257,12 +262,200 @@ def load_or_update_csi_all_closes(
     return existing[["date", "close"]].rename(columns={"close": "csi_all_close"}).reset_index(drop=True)
 
 
+_BREADTH_THREAD_LOCAL = threading.local()
+
+
+def _breadth_session() -> requests.Session:
+    if not hasattr(_BREADTH_THREAD_LOCAL, "session"):
+        session = requests.Session()
+        session.headers.update({"User-Agent": UA, "Referer": "https://gu.qq.com/"})
+        try:
+            from requests.adapters import HTTPAdapter
+            from urllib3.util.retry import Retry
+
+            adapter = HTTPAdapter(
+                max_retries=Retry(
+                    total=2,
+                    connect=2,
+                    read=2,
+                    backoff_factor=0.25,
+                    status_forcelist=[429, 500, 502, 503, 504],
+                    allowed_methods=["GET"],
+                ),
+                pool_connections=32,
+                pool_maxsize=32,
+            )
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+        except Exception:
+            pass
+        _BREADTH_THREAD_LOCAL.session = session
+    return _BREADTH_THREAD_LOCAL.session
+
+
+def _fetch_stock_breadth_contrib(
+    secid: str,
+    code: str,
+    year_ranges: list[tuple[int, int]],
+) -> dict[str, tuple[int, int, int, int, int]]:
+    """拉取单只股票 2015 至今的前复权日 K 并转为逐日(有效,涨,跌,涨停,跌停)计数。"""
+    session = _breadth_session()
+    raw_rows: dict[str, tuple[float, float, float]] = {}
+    for y0, y1 in year_ranges:
+        param = f"{secid},day,{y0}-01-01,{y1}-12-31,800,qfq"
+        rows = []
+        for attempt in range(3):
+            url = TENCENT_KLINE_URLS[attempt % len(TENCENT_KLINE_URLS)]
+            try:
+                resp = session.get(url, params={"param": param}, timeout=12)
+                resp.raise_for_status()
+                payload = resp.json().get("data")
+                if isinstance(payload, dict):
+                    item = payload.get(secid) or {}
+                    rows = item.get("qfqday") or item.get("day") or []
+                break
+            except Exception:
+                time.sleep(0.3 * (attempt + 1))
+        if not rows:
+            break
+        first_date = str(rows[0][0])[:10]
+        for row in rows:
+            if len(row) < 5:
+                continue
+            d_str = str(row[0])[:10]
+            try:
+                c = float(row[2])
+                h = float(row[3])
+                lo = float(row[4])
+            except (TypeError, ValueError):
+                continue
+            if c > 0 and h > 0 and lo > 0:
+                raw_rows[d_str] = (c, h, lo)
+        # 若该段最早日期晚于区间起点一个半月以上，说明此前尚未上市，提前终止
+        if first_date > f"{y0}-02-15":
+            break
+
+    if len(raw_rows) < 2:
+        return {}
+
+    dates_sorted = sorted(raw_rows.keys())
+    is_star = code.startswith(("688", "689"))
+    is_chinext = code.startswith(("300", "301", "302"))
+    is_bse = secid.startswith("bj")
+    out: dict[str, tuple[int, int, int, int, int]] = {}
+    prev_close = raw_rows[dates_sorted[0]][0]
+    for idx in range(1, len(dates_sorted)):
+        d_str = dates_sorted[idx]
+        close, high, low = raw_rows[d_str]
+        if prev_close <= 0:
+            prev_close = close
+            continue
+        ret_pct = (close / prev_close - 1.0) * 100.0
+        up = 1 if ret_pct > 0 else 0
+        down = 1 if ret_pct < 0 else 0
+        limit_up = 0
+        limit_down = 0
+        # 剔除上市前5个无涨跌幅限制交易日（主要针对科创/创业板注册制后）
+        eligible = True
+        if (is_star or (is_chinext and d_str >= "2020-08-24")) and idx < 5:
+            eligible = False
+        if eligible:
+            if is_bse:
+                limit_thr = 29.5
+            elif is_star or (is_chinext and d_str >= "2020-08-24"):
+                limit_thr = 19.5
+            else:
+                limit_thr = 9.5
+            high_ret = (high / prev_close - 1.0) * 100.0
+            low_ret = (low / prev_close - 1.0) * 100.0
+            if high_ret >= limit_thr and close / high >= 0.999 and ret_pct >= limit_thr:
+                limit_up = 1
+            elif low_ret <= -limit_thr and close / low <= 1.001 and ret_pct <= -limit_thr:
+                limit_down = 1
+        out[d_str] = (1, up, down, limit_up, limit_down)
+        prev_close = close
+    return out
+
+
+def backfill_market_breadth_history(
+    universe_cache: Path = DEFAULT_UNIVERSE_CACHE,
+    output_csv: Path = DEFAULT_BREADTH_HISTORY_CACHE,
+    start_year: int = 2015,
+    workers: int = 24,
+) -> pd.DataFrame:
+    """回溯全市场个股日 K，生成 2015 年至今的真实市场宽度与涨跌停日频历史。"""
+    if universe_cache.exists():
+        universe = pd.read_csv(universe_cache, dtype={"code": str})
+    else:
+        from market_breadth_short_term import tencent_a_share_universe
+
+        universe = tencent_a_share_universe(universe_cache, workers=16, refresh=True)
+
+    end_year = pd.Timestamp.now().year
+    year_ranges = []
+    y = start_year
+    while y <= end_year:
+        year_ranges.append((y, min(y + 2, end_year)))
+        y += 3
+    year_ranges.reverse()  # 从最新段往旧段拉取，便于新股提前终止
+
+    totals: dict[str, list[int]] = {}
+    records = list(zip(universe["secid"].astype(str), universe["code"].astype(str)))
+    total_stocks = len(records)
+    print(f"backfilling full-market breadth & limit history ({start_year}~{end_year}) for {total_stocks} stocks...")
+
+    with ThreadPoolExecutor(max_workers=max(1, min(int(workers), 32))) as pool:
+        futs = {
+            pool.submit(_fetch_stock_breadth_contrib, secid, code, year_ranges): secid
+            for secid, code in records
+        }
+        for done, fut in enumerate(as_completed(futs), 1):
+            contrib = fut.result()
+            for d_str, (v, u, d, lu, ld) in contrib.items():
+                acc = totals.get(d_str)
+                if acc is None:
+                    totals[d_str] = [v, u, d, lu, ld]
+                else:
+                    acc[0] += v
+                    acc[1] += u
+                    acc[2] += d
+                    acc[3] += lu
+                    acc[4] += ld
+            if done % 500 == 0 or done == total_stocks:
+                print(f"breadth backfill progress: {done}/{total_stocks}")
+
+    rows = []
+    for d_str in sorted(totals.keys()):
+        v, u, d, lu, ld = totals[d_str]
+        if v < 500:
+            continue
+        denom = u + d
+        adv_ratio = (u / denom * 100.0) if denom > 0 else np.nan
+        rows.append(
+            {
+                "date": d_str,
+                "valid_stock_count": v,
+                "up_count": u,
+                "down_count": d,
+                "advance_ratio_pct": round(adv_ratio, 4) if pd.notna(adv_ratio) else np.nan,
+                "limit_up_count": lu,
+                "limit_down_count": ld,
+            }
+        )
+    df = pd.DataFrame(rows)
+    df.to_csv(output_csv, index=False, encoding="utf-8-sig")
+    print(f"breadth history written: {output_csv}; days={len(df)} ({df['date'].min()}~{df['date'].max()})")
+    return df
+
+
 def calculate_fear_greed_history(
     index_df: pd.DataFrame,
     margin_df: pd.DataFrame,
     sentiment_daily_path: Path = DEFAULT_SENTIMENT_DAILY,
     display_start: str = DISPLAY_START_DATE,
     csi_all_df: pd.DataFrame | None = None,
+    sentiment_intraday_path: Path = DEFAULT_SENTIMENT_INTRADAY,
+    breadth_history_path: Path = DEFAULT_BREADTH_HISTORY_CACHE,
 ) -> tuple[pd.DataFrame, dict]:
     """按双支柱模型计算恐惧贪婪指数全历史序列及最新分项快照。"""
     # 1. 构建五宽基对齐表，计算价格压力（两次取中位数）及基础行情特征
@@ -363,16 +556,34 @@ def calculate_fear_greed_history(
     frame["raw_rsi14"] = frame[rsi_cols].median(axis=1)
     frame["rsi_score"] = rolling_weak_percentile(frame["raw_rsi14"], ROLLING_WINDOW, min_periods=120, ascending=True)
 
-    # (5) 市场宽度 & (6) 涨跌停比：融合本地全市场日频精确数据
+    # (5) 市场宽度 & (6) 涨跌停比：正式日频优先 -> 盘中快照兜底当日 -> 全市场长历史回溯补齐早期
     frame["breadth_score"] = np.nan
     frame["limit_score"] = np.nan
-    if sentiment_daily_path.exists():
-        daily = pd.read_csv(sentiment_daily_path, parse_dates=["date"])
-        daily["date"] = daily["date"].dt.normalize()
-        daily = daily.sort_values("date").drop_duplicates("date")
+    sentiment_frames = []
+    for src_path in (sentiment_daily_path, sentiment_intraday_path, breadth_history_path):
+        if src_path and src_path.exists():
+            try:
+                part = pd.read_csv(src_path, parse_dates=["date"])
+                part["date"] = part["date"].dt.normalize()
+                keep = [c for c in ("date", "advance_ratio_pct", "limit_up_count", "limit_down_count") if c in part.columns]
+                if "date" in keep and len(keep) > 1:
+                    sentiment_frames.append(part[keep])
+            except Exception:
+                pass
+    if sentiment_frames:
+        # 正式日频数据优先；当日尚未入库时使用盘中/最新快照补齐
+        daily = (
+            pd.concat(sentiment_frames, ignore_index=True)
+            .drop_duplicates("date", keep="first")
+            .sort_values("date")
+            .reset_index(drop=True)
+        )
         if "advance_ratio_pct" in daily.columns:
             daily["fg_breadth_score"] = rolling_weak_percentile(
-                daily["advance_ratio_pct"], window=252, min_periods=20, ascending=True
+                pd.to_numeric(daily["advance_ratio_pct"], errors="coerce"),
+                window=252,
+                min_periods=20,
+                ascending=True,
             )
         if {"limit_up_count", "limit_down_count"}.issubset(daily.columns):
             up = pd.to_numeric(daily["limit_up_count"], errors="coerce")
@@ -1272,6 +1483,7 @@ def build_fear_greed(
     margin_cache: Path = DEFAULT_MARGIN_CACHE,
     csi_all_cache: Path = DEFAULT_CSI_ALL_CACHE,
     sentiment_daily: Path = DEFAULT_SENTIMENT_DAILY,
+    sentiment_intraday: Path = DEFAULT_SENTIMENT_INTRADAY,
     output_csv: Path = DEFAULT_HISTORY_CSV,
     output_html: Path = DEFAULT_OUTPUT_HTML,
     force: bool = False,
@@ -1281,7 +1493,11 @@ def build_fear_greed(
     margin_df = load_or_update_margin_history(margin_cache, force=force)
     csi_all_df = load_or_update_csi_all_closes(csi_all_cache, force=force)
     frame, meta = calculate_fear_greed_history(
-        index_df, margin_df, sentiment_daily, csi_all_df=csi_all_df
+        index_df,
+        margin_df,
+        sentiment_daily,
+        csi_all_df=csi_all_df,
+        sentiment_intraday_path=sentiment_intraday,
     )
     save_history_csv(frame, output_csv)
     render_fear_greed_page(frame, meta, output_html)
@@ -1291,9 +1507,13 @@ def build_fear_greed(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="生成 A股恐惧贪婪指数")
     parser.add_argument("--force", action="store_true", help="强制全量重拉历史缓存")
+    parser.add_argument("--backfill-breadth", action="store_true", help="回溯2015年至今全市场宽度与涨跌停真实历史")
+    parser.add_argument("--workers", type=int, default=24, help="回溯全市场日K的并发线程数")
     parser.add_argument("--output-html", default=str(DEFAULT_OUTPUT_HTML))
     parser.add_argument("--output-csv", default=str(DEFAULT_HISTORY_CSV))
     args = parser.parse_args()
+    if args.backfill_breadth:
+        backfill_market_breadth_history(workers=args.workers)
     snapshot = build_fear_greed(
         output_csv=Path(args.output_csv),
         output_html=Path(args.output_html),

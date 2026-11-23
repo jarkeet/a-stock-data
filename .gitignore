@@ -26,6 +26,7 @@ reports/
 
 /market_fear_greed_index_cache.csv
 /market_fear_greed_margin_cache.csv
+/market_fear_greed_breadth_history.csv
 /market_fear_greed_history.csv
 /market_cn10y_bond_yield_cache.csv
 /market_valuation_csi500.csv
