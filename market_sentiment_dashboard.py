@@ -1665,6 +1665,407 @@ DASHBOARD_REFRESH_SCRIPT = r"""<script>
 </script>"""
 
 
+CAPITAL_CHART_SCRIPT = r"""<script>
+(function(){
+  var svg=document.getElementById("capital-margin-svg");
+  var dataNode=document.getElementById("capital-margin-data");
+  if(!svg||!dataNode)return;
+  var payload=null;
+  try{payload=JSON.parse(dataNode.textContent||"null")}catch(error){return}
+  if(!payload||!Array.isArray(payload.dates)||payload.dates.length<2)return;
+
+  var dates=payload.dates;
+  var balance=payload.balance||[];
+  var ma20=payload.ma20||[];
+  var total=dates.length;
+  var maxIndex=total-1;
+  var minSpan=Math.min(20,maxIndex);
+  var WIDTH=1080,HEIGHT=290,LEFT=56,RIGHT=22,TOP=24,BOTTOM=38;
+  var PLOT_W=WIDTH-LEFT-RIGHT,PLOT_H=HEIGHT-TOP-BOTTOM;
+  var SVG_NS="http://www.w3.org/2000/svg";
+  var storageKey="market-capital-chart-view-v1";
+
+  var linePath=svg.querySelector("[data-capital-line]");
+  var ma20Path=svg.querySelector("[data-capital-ma20]");
+  var extremaGroup=svg.querySelector("[data-capital-extrema]");
+  var datesGroup=svg.querySelector("[data-capital-dates]");
+  var yMaxLabel=svg.querySelector("[data-capital-ymax]");
+  var yMidLabel=svg.querySelector("[data-capital-ymid]");
+  var yMinLabel=svg.querySelector("[data-capital-ymin]");
+  var crosshair=svg.querySelector("[data-capital-crosshair]");
+  var dotBalance=svg.querySelector("[data-capital-dot-balance]");
+  var dotMa20=svg.querySelector("[data-capital-dot-ma20]");
+  var section=svg.closest("section");
+  var rangeLabel=section?section.querySelector("[data-capital-range]"):null;
+  var resetBtn=section?section.querySelector("[data-capital-reset]"):null;
+
+  var viewStart=0,viewEnd=maxIndex;
+  var currentMin=0,currentMax=1;
+  var selectedIndex=-1;
+
+  function clamp(val,lo,hi){return Math.max(lo,Math.min(hi,val))}
+
+  function loadView(){
+    try{
+      var saved=JSON.parse(sessionStorage.getItem(storageKey)||"null");
+      if(saved&&saved.total===total&&typeof saved.start==="number"&&typeof saved.end==="number"){
+        var span=clamp(saved.end-saved.start,minSpan,maxIndex);
+        viewStart=clamp(saved.start,0,maxIndex-span);
+        viewEnd=viewStart+span;
+      }
+    }catch(error){}
+  }
+
+  function saveView(){
+    try{
+      if(viewEnd-viewStart>=maxIndex-1e-6){
+        sessionStorage.removeItem(storageKey);
+      }else{
+        sessionStorage.setItem(storageKey,JSON.stringify({total:total,start:viewStart,end:viewEnd}));
+      }
+    }catch(error){}
+  }
+
+  function formatNumber(val,digits){
+    return Number(val).toLocaleString("zh-CN",{
+      minimumFractionDigits:digits,
+      maximumFractionDigits:digits
+    });
+  }
+
+  function xFor(index){
+    var span=Math.max(viewEnd-viewStart,1e-9);
+    return LEFT+((index-viewStart)/span)*PLOT_W;
+  }
+
+  function yFor(value){
+    var span=Math.max(currentMax-currentMin,1e-9);
+    return TOP+((currentMax-value)/span)*PLOT_H;
+  }
+
+  function clearFocus(){
+    selectedIndex=-1;
+    if(crosshair)crosshair.setAttribute("hidden","");
+    if(dotBalance)dotBalance.setAttribute("hidden","");
+    if(dotMa20)dotMa20.setAttribute("hidden","");
+  }
+
+  function updateFocusVisual(){
+    if(selectedIndex<0||selectedIndex<viewStart||selectedIndex>viewEnd){
+      if(crosshair)crosshair.setAttribute("hidden","");
+      if(dotBalance)dotBalance.setAttribute("hidden","");
+      if(dotMa20)dotMa20.setAttribute("hidden","");
+      return;
+    }
+    var x=xFor(selectedIndex);
+    if(crosshair){
+      crosshair.setAttribute("x1",x.toFixed(1));
+      crosshair.setAttribute("x2",x.toFixed(1));
+      crosshair.removeAttribute("hidden");
+    }
+    var bVal=balance[selectedIndex];
+    if(dotBalance&&bVal!==null&&bVal!==undefined){
+      dotBalance.setAttribute("cx",x.toFixed(1));
+      dotBalance.setAttribute("cy",yFor(bVal).toFixed(1));
+      dotBalance.removeAttribute("hidden");
+    }
+    var mVal=ma20[selectedIndex];
+    if(dotMa20&&mVal!==null&&mVal!==undefined){
+      dotMa20.setAttribute("cx",x.toFixed(1));
+      dotMa20.setAttribute("cy",yFor(mVal).toFixed(1));
+      dotMa20.removeAttribute("hidden");
+    }else if(dotMa20){
+      dotMa20.setAttribute("hidden","");
+    }
+  }
+
+  function buildPath(series,i0,i1){
+    var cmds=[];
+    for(var i=i0;i<=i1;i++){
+      var v=series[i];
+      if(v===null||v===undefined||isNaN(v))continue;
+      cmds.push((cmds.length?"L":"M")+xFor(i).toFixed(1)+","+yFor(v).toFixed(1));
+    }
+    return cmds.join(" ");
+  }
+
+  function renderExtrema(i0,i1){
+    if(!extremaGroup)return;
+    extremaGroup.textContent="";
+    var maxIdx=-1,minIdx=-1,maxVal=-Infinity,minVal=Infinity;
+    for(var i=i0;i<=i1;i++){
+      var v=balance[i];
+      if(v===null||v===undefined||isNaN(v))continue;
+      if(v>maxVal){maxVal=v;maxIdx=i}
+      if(v<minVal){minVal=v;minIdx=i}
+    }
+    if(maxIdx<0)return;
+    var pts=[{label:"最高",idx:maxIdx,val:maxVal}];
+    if(minIdx>=0&&minIdx!==maxIdx)pts.push({label:"最低",idx:minIdx,val:minVal});
+    pts.forEach(function(pt){
+      var x=xFor(pt.idx),y=yFor(pt.val);
+      var textX=x,anchor="middle";
+      if(x<LEFT+95){textX=x+7;anchor="start"}
+      else if(x>WIDTH-RIGHT-95){textX=x-7;anchor="end"}
+      var textY=pt.label==="最高"
+        ?(y<TOP+22?y+18:y-10)
+        :(y>HEIGHT-BOTTOM-22?y-10:y+18);
+      var dot=document.createElementNS(SVG_NS,"circle");
+      dot.setAttribute("class","extrema-dot extrema-amount");
+      dot.setAttribute("cx",x.toFixed(1));
+      dot.setAttribute("cy",y.toFixed(1));
+      dot.setAttribute("r","4");
+      var txt=document.createElementNS(SVG_NS,"text");
+      txt.setAttribute("class","extrema-text extrema-amount");
+      txt.setAttribute("x",textX.toFixed(1));
+      txt.setAttribute("y",textY.toFixed(1));
+      txt.setAttribute("text-anchor",anchor);
+      txt.textContent="余额"+pt.label+" "+formatNumber(pt.val,0)+"亿";
+      extremaGroup.appendChild(dot);
+      extremaGroup.appendChild(txt);
+    });
+  }
+
+  function renderDates(i0,i1){
+    if(!datesGroup)return;
+    datesGroup.textContent="";
+    var span=Math.max(i1-i0,1);
+    var count=Math.min(7,span+1);
+    var seen={};
+    for(var k=0;k<count;k++){
+      var idx=Math.round(i0+k*span/Math.max(count-1,1));
+      if(seen[idx])continue;
+      seen[idx]=true;
+      var x=xFor(idx);
+      var anchor=k===0?"start":(k===count-1?"end":"middle");
+      var txt=document.createElementNS(SVG_NS,"text");
+      txt.setAttribute("x",x.toFixed(1));
+      txt.setAttribute("y","278");
+      txt.setAttribute("text-anchor",anchor);
+      txt.textContent=dates[idx];
+      datesGroup.appendChild(txt);
+    }
+  }
+
+  function render(){
+    var i0=Math.max(0,Math.floor(viewStart));
+    var i1=Math.min(maxIndex,Math.ceil(viewEnd));
+    var lo=Infinity,hi=-Infinity;
+    for(var i=i0;i<=i1;i++){
+      var b=balance[i],m=ma20[i];
+      if(b!==null&&b!==undefined&&!isNaN(b)){if(b<lo)lo=b;if(b>hi)hi=b}
+      if(m!==null&&m!==undefined&&!isNaN(m)){if(m<lo)lo=m;if(m>hi)hi=m}
+    }
+    if(!isFinite(lo)||!isFinite(hi)){lo=0;hi=1}
+    var pad=Math.max((hi-lo)*0.08,hi*0.005);
+    currentMin=Math.max(0,lo-pad);
+    currentMax=hi+pad;
+    var mid=(currentMin+currentMax)/2;
+
+    if(yMaxLabel)yMaxLabel.textContent=Math.round(currentMax);
+    if(yMidLabel)yMidLabel.textContent=Math.round(mid);
+    if(yMinLabel)yMinLabel.textContent=Math.round(currentMin);
+    if(linePath)linePath.setAttribute("d",buildPath(balance,i0,i1));
+    if(ma20Path)ma20Path.setAttribute("d",buildPath(ma20,i0,i1));
+    renderExtrema(i0,i1);
+    renderDates(i0,i1);
+    updateFocusVisual();
+
+    var isZoomed=(viewEnd-viewStart)<maxIndex-0.5;
+    svg.classList.toggle("is-zoomed",isZoomed);
+    if(resetBtn)resetBtn.hidden=!isZoomed;
+    if(rangeLabel){
+      var ratio=maxIndex/Math.max(viewEnd-viewStart,1);
+      rangeLabel.textContent=dates[i0]+" ~ "+dates[i1]+(isZoomed?" ("+ratio.toFixed(1)+"×)":"");
+    }
+  }
+
+  function clientToSvgX(clientX){
+    var rect=svg.getBoundingClientRect();
+    if(!rect.width)return LEFT;
+    return ((clientX-rect.left)/rect.width)*WIDTH;
+  }
+
+  function hideCapitalPopover(){
+    var tip=document.getElementById("chart-data-popover");
+    if(tip&&tip.getAttribute("data-owner")==="capital"){
+      tip.hidden=true;
+      tip.classList.remove("is-hover-tip");
+      tip.removeAttribute("data-owner");
+    }
+  }
+
+  function showPopoverForIndex(idx,clientX,clientY,isHover){
+    var tip=document.getElementById("chart-data-popover");
+    if(!tip)return;
+    var bVal=balance[idx];
+    if(bVal===null||bVal===undefined)return;
+    var mVal=ma20[idx];
+    var prevVal=idx>0?balance[idx-1]:null;
+    var extras=[];
+    if(mVal!==null&&mVal!==undefined){
+      extras.push("20日均线："+formatNumber(mVal,2)+"亿元");
+    }
+    if(prevVal!==null&&prevVal!==undefined){
+      var diff=bVal-prevVal;
+      extras.push("较前日："+(diff>=0?"+":"")+formatNumber(diff,2)+"亿元");
+    }
+    var seriesEl=tip.querySelector("[data-chart-popup-series]");
+    var dateEl=tip.querySelector("[data-chart-popup-date]");
+    var valueEl=tip.querySelector("[data-chart-popup-value]");
+    var extraEl=tip.querySelector("[data-chart-popup-extra]");
+    if(seriesEl)seriesEl.textContent="沪深两市融资余额";
+    if(dateEl)dateEl.textContent=dates[idx];
+    if(valueEl)valueEl.textContent=formatNumber(bVal,2)+"亿元";
+    if(extraEl){
+      extraEl.textContent=extras.join(" · ");
+      extraEl.hidden=!extras.length;
+    }
+    tip.setAttribute("data-owner","capital");
+    tip.classList.toggle("is-hover-tip",Boolean(isHover));
+    tip.hidden=false;
+    var tipRect=tip.getBoundingClientRect();
+    var left=clientX+16;
+    if(left+tipRect.width>window.innerWidth-8){
+      left=clientX-tipRect.width-16;
+    }
+    left=Math.min(window.innerWidth-tipRect.width-8,Math.max(8,left));
+    var top=clientY-tipRect.height-14;
+    if(top<8)top=Math.min(window.innerHeight-tipRect.height-8,clientY+16);
+    tip.style.left=left+"px";
+    tip.style.top=Math.max(8,top)+"px";
+  }
+
+  function updateHoverAt(clientX,clientY,isHover){
+    var svgX=clientToSvgX(clientX);
+    if(svgX<LEFT||svgX>WIDTH-RIGHT){
+      clearFocus();
+      hideCapitalPopover();
+      return;
+    }
+    var ratio=clamp((svgX-LEFT)/PLOT_W,0,1);
+    var idx=clamp(Math.round(viewStart+ratio*(viewEnd-viewStart)),0,maxIndex);
+    selectedIndex=idx;
+    updateFocusVisual();
+    showPopoverForIndex(idx,clientX,clientY,isHover);
+  }
+
+  // 按住 Ctrl + 鼠标滚轮以鼠标所在位置为中心缩放
+  svg.addEventListener("wheel",function(event){
+    if(!event.ctrlKey)return;
+    event.preventDefault();
+    var svgX=clientToSvgX(event.clientX);
+    var ratio=clamp((svgX-LEFT)/PLOT_W,0,1);
+    var span=viewEnd-viewStart;
+    var factor=event.deltaY<0?0.8:1.25;
+    var newSpan=clamp(span*factor,minSpan,maxIndex);
+    if(Math.abs(newSpan-span)<1e-6)return;
+    var anchor=viewStart+ratio*span;
+    var nextStart=clamp(anchor-ratio*newSpan,0,maxIndex-newSpan);
+    viewStart=nextStart;
+    viewEnd=nextStart+newSpan;
+    saveView();
+    render();
+    updateHoverAt(event.clientX,event.clientY,true);
+  },{passive:false});
+
+  // 按住鼠标左键横向拖动平移
+  var dragging=false,dragStartX=0,dragOriginStart=0,dragOriginEnd=0,dragMoved=false,suppressClick=false;
+  svg.addEventListener("mousedown",function(event){
+    if(event.button!==0)return;
+    dragging=true;
+    dragMoved=false;
+    dragStartX=event.clientX;
+    dragOriginStart=viewStart;
+    dragOriginEnd=viewEnd;
+    event.preventDefault();
+  });
+
+  svg.addEventListener("mousemove",function(event){
+    if(dragging)return;
+    updateHoverAt(event.clientX,event.clientY,true);
+  });
+
+  svg.addEventListener("mouseleave",function(){
+    if(dragging)return;
+    clearFocus();
+    hideCapitalPopover();
+  });
+
+  window.addEventListener("mousemove",function(event){
+    if(!dragging)return;
+    var dx=event.clientX-dragStartX;
+    if(!dragMoved&&Math.abs(dx)>3){
+      dragMoved=true;
+      svg.classList.add("is-dragging");
+      clearFocus();
+      hideCapitalPopover();
+    }
+    if(!dragMoved)return;
+    var rect=svg.getBoundingClientRect();
+    var plotPx=rect.width*(PLOT_W/WIDTH);
+    if(plotPx<=0)return;
+    var span=dragOriginEnd-dragOriginStart;
+    if(span>=maxIndex-1e-6)return;
+    var deltaIdx=-(dx/plotPx)*span;
+    var nextStart=clamp(dragOriginStart+deltaIdx,0,maxIndex-span);
+    viewStart=nextStart;
+    viewEnd=nextStart+span;
+    render();
+  });
+
+  window.addEventListener("mouseup",function(event){
+    if(!dragging)return;
+    dragging=false;
+    svg.classList.remove("is-dragging");
+    if(dragMoved){
+      suppressClick=true;
+      saveView();
+      var rect=svg.getBoundingClientRect();
+      if(event.clientX>=rect.left&&event.clientX<=rect.right&&event.clientY>=rect.top&&event.clientY<=rect.bottom){
+        updateHoverAt(event.clientX,event.clientY,true);
+      }
+    }
+  });
+
+  // 单击折线区域查看当日融资余额与20日均线
+  svg.addEventListener("click",function(event){
+    if(suppressClick){suppressClick=false;return}
+    updateHoverAt(event.clientX,event.clientY,false);
+    event.stopPropagation();
+  });
+
+  // 双击或点击重置按钮恢复全量视图
+  function resetView(){
+    viewStart=0;
+    viewEnd=maxIndex;
+    clearFocus();
+    saveView();
+    render();
+  }
+  svg.addEventListener("dblclick",function(event){
+    event.preventDefault();
+    resetView();
+  });
+  if(resetBtn)resetBtn.addEventListener("click",resetView);
+
+  // 点击图表外部或关闭弹窗时清理十字准星
+  document.addEventListener("click",function(event){
+    if(event.target&&event.target.closest&&event.target.closest("#chart-data-popover")){
+      if(event.target.closest("[data-chart-popup-close]"))clearFocus();
+      return;
+    }
+    if(!event.target||!event.target.closest||!event.target.closest("#capital-margin-svg")){
+      clearFocus();
+    }
+  });
+
+  loadView();
+  render();
+})();
+</script>"""
+
+
 def score_meaning(value, metric):
     """把最新分数转换为面向读者的市场含义。"""
     if pd.isna(value):
@@ -1733,6 +2134,164 @@ def overall_summary(last):
     return summary
 
 
+def _pct_pill_style(pct: float, *, high_is_green: bool = True) -> str:
+    """根据百分位返回简洁的文字与浅底配色样式。"""
+    if pd.isna(pct):
+        return "color:#64748b;background:#f1f5f9"
+    if high_is_green:
+        if pct >= 70:
+            return "color:#087f5b;background:#e6f7f1"
+        if pct >= 30:
+            return "color:#b47b00;background:#fff7e0"
+        return "color:#b42318;background:#fde8e8"
+    if pct <= 25:
+        return "color:#087f5b;background:#e6f7f1"
+    if pct <= 45:
+        return "color:#2b8a57;background:#edf8f2"
+    if pct <= 55:
+        return "color:#b47b00;background:#fff7e0"
+    if pct <= 75:
+        return "color:#ea580c;background:#fff1e6"
+    return "color:#b42318;background:#fde8e8"
+
+
+def _fear_greed_entry_banner(history_file="market_fear_greed_history.csv") -> str:
+    """在主仪表盘底部生成简明带色与百分位的恐惧贪婪指数入口卡片。"""
+    detail_html = html.escape("暂无恐惧贪婪指数数据")
+    path = Path(history_file)
+    if path.exists():
+        try:
+            fg = pd.read_csv(path)
+            if not fg.empty and "fear_greed_index" in fg.columns:
+                row = fg.iloc[-1]
+                score = float(row["fear_greed_index"])
+                pct10 = float(row.get("history_pct_10y", float("nan")))
+                if score <= 25:
+                    state, color, bg = "极度恐慌", "#087f5b", "#e6f7f1"
+                elif score <= 45:
+                    state, color, bg = "恐慌", "#2b8a57", "#edf8f2"
+                elif score <= 55:
+                    state, color, bg = "中性", "#b47b00", "#fff7e0"
+                elif score <= 75:
+                    state, color, bg = "贪婪", "#ea580c", "#fff1e6"
+                else:
+                    state, color, bg = "极度贪婪", "#b42318", "#fde8e8"
+                pct_style = _pct_pill_style(pct10, high_is_green=False)
+                pct_badge = (
+                    f'<em class="entry-pill" style="{pct_style}">近10年分位 {pct10:.1f}%</em>'
+                    if pd.notna(pct10)
+                    else ""
+                )
+                detail_html = (
+                    f'<em class="entry-date">{html.escape(str(row["date"]))}</em>'
+                    f'<em class="entry-val" style="color:{color}">{score:.2f} 分</em>'
+                    f'<em class="entry-pill" style="color:{color};background:{bg}">{state}</em>'
+                    f'{pct_badge}'
+                )
+        except Exception:
+            pass
+    return (
+        '<a class="valuation-report-link" href="/fear-greed/">'
+        '<span><b>A股恐惧贪婪指数</b>'
+        f'<small class="entry-metrics">{detail_html}</small></span>'
+        '<strong>查看详情 →</strong></a>'
+    )
+
+
+def _equity_bond_entry_banner(
+    hs300_file="market_hs300_equity_bond_history.csv",
+    zz500_file="market_zz500_equity_bond_history.csv",
+) -> str:
+    """在主仪表盘底部生成简明带色与百分位的沪深300/中证500股债利差入口卡片。"""
+    detail_html = html.escape("暂无股债利差与股债比数据")
+    items = []
+    latest_date = ""
+    specs = (
+        ("沪深300", hs300_file, "#2563eb", "#7c3aed"),
+        ("中证500", zz500_file, "#0d9488", "#9333ea"),
+    )
+    for label, file_path, spread_color, ratio_color in specs:
+        path = Path(file_path)
+        if not path.exists():
+            continue
+        try:
+            eb = pd.read_csv(path, parse_dates=["date"])
+            if not eb.empty and {"equity_bond_spread_pct", "equity_bond_ratio"}.issubset(eb.columns):
+                eb = eb.sort_values("date").reset_index(drop=True)
+                cutoff = eb["date"].max() - pd.DateOffset(years=10)
+                sub = eb[eb["date"] >= cutoff]
+                row = sub.iloc[-1]
+                latest_date = row["date"].strftime("%Y-%m-%d")
+                sp = float(row["equity_bond_spread_pct"])
+                sp_pct = float((sub["equity_bond_spread_pct"] <= sp).mean() * 100.0)
+                sp_style = _pct_pill_style(sp_pct, high_is_green=True)
+                items.append(
+                    f'<em class="entry-group">'
+                    f'<em class="entry-tag">{label}</em>'
+                    f'利差 <em class="entry-val" style="color:{spread_color}">{sp:.2f}%</em>'
+                    f'<em class="entry-pill" style="{sp_style}">近10年分位 {sp_pct:.1f}%</em>'
+                    f'</em>'
+                )
+        except Exception:
+            pass
+    if items:
+        detail_html = (
+            f'<em class="entry-date">{html.escape(latest_date)}</em>'
+            + '<em class="entry-sep">·</em>'.join(items)
+        )
+    return (
+        '<a class="valuation-report-link" href="/equity-bond-spread/">'
+        '<span><b>股债利差、股债比与股权风险溢价 ERP（沪深300 / 中证500）</b>'
+        f'<small class="entry-metrics">{detail_html}</small></span>'
+        '<strong>查看走势 →</strong></a>'
+    )
+
+
+def _buffett_entry_banner(history_file="market_buffett_index_history.csv") -> str:
+    """在主仪表盘底部生成简明带色与百分位的巴菲特指数入口卡片。"""
+    detail_html = html.escape("暂无巴菲特指数数据")
+    path = Path(history_file)
+    if path.exists():
+        try:
+            bf = pd.read_csv(path, parse_dates=["date"])
+            if not bf.empty and "buffett_index_pct" in bf.columns:
+                bf = bf.sort_values("date").reset_index(drop=True)
+                row = bf.iloc[-1]
+                val = float(row["buffett_index_pct"])
+                cutoff = row["date"] - pd.DateOffset(years=10)
+                sub10 = bf[bf["date"] >= cutoff]
+                pct10 = float((sub10["buffett_index_pct"] <= val).mean() * 100.0)
+                if val < 55:
+                    state, color, bg = "显著偏低", "#087f5b", "#e6f7f1"
+                elif val < 70:
+                    state, color, bg = "偏低区间", "#2b8a57", "#edf8f2"
+                elif val < 85:
+                    state, color, bg = "合理区间", "#b47b00", "#fff7e0"
+                elif val < 100:
+                    state, color, bg = "偏高区间", "#ea580c", "#fff1e6"
+                else:
+                    state, color, bg = "高位警示", "#b42318", "#fde8e8"
+                pct_style = _pct_pill_style(pct10, high_is_green=False)
+                mcap_w = float(row["total_mcap_yi"]) / 1e4
+                gdp_w = float(row["gdp_ttm_yi"]) / 1e4
+                detail_html = (
+                    f'<em class="entry-date">{row["date"]:%Y-%m-%d}</em>'
+                    f'<em class="entry-val" style="color:{color}">{val:.2f}%</em>'
+                    f'<em class="entry-pill" style="color:{color};background:{bg}">{state}</em>'
+                    f'<em class="entry-pill" style="{pct_style}">近10年分位 {pct10:.1f}%</em>'
+                    f'<em class="entry-sep">·</em>'
+                    f'<em class="entry-date">总市值 {mcap_w:.2f}万亿 / GDP {gdp_w:.2f}万亿</em>'
+                )
+        except Exception:
+            pass
+    return (
+        '<a class="valuation-report-link" href="/buffett-index/">'
+        '<span><b>巴菲特指数（沪深股票市值总额 / GDP）</b>'
+        f'<small class="entry-metrics">{detail_html}</small></span>'
+        '<strong>查看详情 →</strong></a>'
+    )
+
+
 def render_dashboard(
     df,
     output="market_sentiment_dashboard.html",
@@ -1789,17 +2348,18 @@ def render_dashboard(
     else:
         capital = df[["date", "hs_margin_balance_yi"]].copy()
     capital = capital.dropna(subset=["hs_margin_balance_yi"]).sort_values("date")
-    capital["hs_margin_balance_ma20_yi"] = (
-        capital.hs_margin_balance_yi.rolling(20, min_periods=10).mean()
-    )
     if not capital.empty:
-        capital_cutoff = capital.date.max() - pd.DateOffset(years=2)
+        capital_cutoff = pd.Timestamp("2020-01-01")
         capital = capital[capital.date >= capital_cutoff].reset_index(drop=True)
+        capital["hs_margin_balance_ma20_yi"] = (
+            capital.hs_margin_balance_yi.rolling(20, min_periods=10).mean()
+        )
     if capital.empty:
         capital_min, capital_mid, capital_max = 0.0, 0.5, 1.0
         capital_path, capital_ma20_path, capital_dates = "", "", ""
         capital_extrema = ""
-        capital_clicks, capital_ma20_clicks = "", ""
+        capital_range_text = ""
+        capital_payload_json = "null"
         capital_note = "暂无沪深两市融资余额数据。"
     else:
         capital_low = float(
@@ -1827,32 +2387,30 @@ def render_dashboard(
             css_class="extrema-amount",
             prefix="余额",
         )
-        capital_clicks = line_click_points(
-            capital.hs_margin_balance_yi,
-            capital.date,
-            capital_max,
-            series_name="沪深两市融资余额",
-            formatter=lambda value: f"{value:,.2f}亿元",
-            css_class="chart-hit-amount",
-            height=290,
-            minimum=capital_min,
+        capital_dates = date_axis_labels(capital.date, count=7)
+        capital_range_text = (
+            f"{capital.date.iloc[0]:%Y-%m-%d} ~ {capital.date.iloc[-1]:%Y-%m-%d}"
         )
-        capital_ma20_clicks = line_click_points(
-            capital.hs_margin_balance_ma20_yi,
-            capital.date,
-            capital_max,
-            series_name="融资余额20日均线",
-            formatter=lambda value: f"{value:,.2f}亿元",
-            css_class="chart-hit-mean",
-            height=290,
-            minimum=capital_min,
+        capital_payload_json = json.dumps(
+            {
+                "dates": [d.strftime("%Y-%m-%d") for d in capital.date],
+                "balance": [
+                    round(float(v), 2) if pd.notna(v) else None
+                    for v in capital.hs_margin_balance_yi
+                ],
+                "ma20": [
+                    round(float(v), 2) if pd.notna(v) else None
+                    for v in capital.hs_margin_balance_ma20_yi
+                ],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
-        capital_dates = date_axis_labels(capital.date)
         capital_note = (
-            "纵轴：沪深两市融资余额合计（亿元）· 最近两年 · "
+            f"纵轴：沪深两市融资余额合计（亿元）· {capital.date.iloc[0]:%Y-%m-%d} 起 · "
             f"为突出趋势，纵轴采用局部缩放；最新余额 {capital.hs_margin_balance_yi.iloc[-1]:,.2f} 亿元，"
             f"20日均值 {capital.hs_margin_balance_ma20_yi.iloc[-1]:,.2f} 亿元。"
-            "点击折线数据点可查看对应交易日数值。"
+            "按住 Ctrl + 滚轮缩放，按住左键拖动平移，双击重置视图，鼠标移动可实时查看当日数值。"
         )
     breadth_trend = df.dropna(subset=["breadth_score"]).tail(120).reset_index(drop=True)
     short_trend = df.dropna(subset=["short_term_score"]).tail(120).reset_index(drop=True)
@@ -2271,9 +2829,99 @@ def render_dashboard(
     )
     summary = overall_summary(last)
     valuation_html = market_valuation_section(valuation_file)
+    fear_greed_entry_html = _fear_greed_entry_banner()
+    equity_bond_entry_html = _equity_bond_entry_banner()
+    buffett_entry_html = _buffett_entry_banner()
+
+    # 构造第二行“综合情绪”与“市场阶段”增强卡片内容
+    prev_score = (
+        float(df["sentiment_score"].iloc[-2])
+        if len(df) >= 2 and pd.notna(df["sentiment_score"].iloc[-2])
+        else float("nan")
+    )
+    score_diff_html = ""
+    if pd.notna(last.sentiment_score) and pd.notna(prev_score):
+        diff = float(last.sentiment_score) - prev_score
+        diff_cls = "rise" if diff > 0 else ("fall" if diff < 0 else "")
+        score_diff_html = f'<em class="card-diff {diff_cls}">较前日 {diff:+.1f}</em>'
+
+    sub_pills = []
+    for key, (label, weight) in COMPONENTS.items():
+        val = last.get(key)
+        tone = score_tone(val)
+        val_text = f"{float(val):.0f}" if pd.notna(val) else "--"
+        sub_pills.append(
+            f'<div class="card-sub-item">'
+            f'<span>{label}<small>({weight}%)</small></span>'
+            f'<strong class="tone {tone}">{val_text}</strong>'
+            f'</div>'
+        )
+    sub_pills_html = "".join(sub_pills)
+
+    struct_val = float(last.structural_score) if pd.notna(last.structural_score) else 0.0
+    mom_val = float(last.momentum_score) if pd.notna(last.momentum_score) else 0.0
+    struct_tone = score_tone(last.structural_score)
+    mom_tone = score_tone(last.momentum_score)
+
+    sentiment_120d_entry_html = (
+        '<a class="valuation-report-link" href="/sentiment-120d/">'
+        '<span><b>近120日市场综合情绪</b>'
+        '<small class="entry-metrics">'
+        f'<em class="entry-date">{last.date:%Y-%m-%d}</em>'
+        f'<em class="entry-val tone {score_tone(last.sentiment_score)}">综合分 {score}</em>'
+        f'<em class="entry-pill" style="{_pct_pill_style(float(last.sentiment_score) if pd.notna(last.sentiment_score) else float("nan"), high_is_green=False)}">{last.sentiment_state}</em>'
+        f'<em class="entry-sep">·</em>'
+        f'<em class="entry-val tone {mom_tone}">{html.escape(str(last.market_phase))}</em>'
+        '</small></span>'
+        '<strong>查看趋势 →</strong></a>'
+    )
+
+    popover_script = r'''<script>(function(){var tip=document.getElementById("chart-data-popover");if(!tip)return;var series=tip.querySelector("[data-chart-popup-series]"),date=tip.querySelector("[data-chart-popup-date]"),value=tip.querySelector("[data-chart-popup-value]"),extra=tip.querySelector("[data-chart-popup-extra]");function hideTip(){tip.hidden=true}function showTip(target){tip.classList.remove("is-hover-tip");tip.removeAttribute("data-owner");series.textContent=target.getAttribute("data-chart-series")||"";date.textContent=target.getAttribute("data-chart-date")||"";value.textContent=target.getAttribute("data-chart-value")||"";var extraText=target.getAttribute("data-chart-extra")||"";extra.textContent=extraText;extra.hidden=!extraText;tip.hidden=false;var targetRect=target.getBoundingClientRect(),tipRect=tip.getBoundingClientRect();var left=Math.min(window.innerWidth-tipRect.width-8,Math.max(8,targetRect.left+targetRect.width/2-tipRect.width/2));var top=targetRect.top-tipRect.height-10;if(top<8)top=Math.min(window.innerHeight-tipRect.height-8,targetRect.bottom+10);tip.style.left=left+"px";tip.style.top=Math.max(8,top)+"px"}document.addEventListener("click",function(event){var target=event.target.closest?event.target.closest("[data-chart-date]"):null;if(target){showTip(target);return}if(event.target.closest&&event.target.closest("#chart-data-popover")){if(event.target.closest("[data-chart-popup-close]"))hideTip();return}hideTip()});document.addEventListener("keydown",function(event){if(event.key==="Escape"){hideTip();return}var target=event.target.closest?event.target.closest("[data-chart-date]"):null;if(target&&(event.key==="Enter"||event.key===" ")){event.preventDefault();showTip(target)}})})();</script>'''
+
+    sentiment_120d_sections = (
+        f'<div class="grid"><section><h2>近120日综合情绪</h2>'
+        f'<svg class="sentiment-chart" viewBox="0 0 1080 500" role="img" aria-label="近120日综合情绪，背景按极冷、偏冷、中性、偏热和过热分级">'
+        f'<rect class="sentiment-band-hot-deep" x="56" y="26" width="1002" height="103"/>'
+        f'<rect class="sentiment-band-hot" x="56" y="129" width="1002" height="61.8"/>'
+        f'<rect class="sentiment-band-neutral" x="56" y="190.8" width="1002" height="61.8"/>'
+        f'<rect class="sentiment-band-cold" x="56" y="252.6" width="1002" height="82.4"/>'
+        f'<rect class="sentiment-band-cold-deep" x="56" y="335" width="1002" height="103"/>'
+        f'<line class="axis" x1="56" y1="438" x2="1058" y2="438"/><line class="axis" x1="56" y1="335" x2="1058" y2="335"/><line class="axis" x1="56" y1="252.6" x2="1058" y2="252.6"/><line class="axis" x1="56" y1="190.8" x2="1058" y2="190.8"/><line class="axis" x1="56" y1="129" x2="1058" y2="129"/><line class="axis" x1="56" y1="26" x2="1058" y2="26"/>'
+        f'<text x="20" y="442">0</text><text x="12" y="339">25</text><text x="12" y="257">45</text><text x="12" y="195">60</text><text x="12" y="133">75</text><text x="4" y="30">100</text>'
+        f'<text class="sentiment-band-label" x="1046" y="82" fill="#8f1919">过热 76–100</text><text class="sentiment-band-label" x="1046" y="164" fill="#b6403c">偏热 61–75</text><text class="sentiment-band-label" x="1046" y="225" fill="#8a6500">中性 46–60</text><text class="sentiment-band-label" x="1046" y="298" fill="#26784e">偏冷 26–45</text><text class="sentiment-band-label" x="1046" y="390" fill="#075f45">极冷 0–25</text>'
+        f'<path class="score-halo" d="{score_path}"/><path class="score" d="{score_path}"/>{score_clicks}{score_extrema}{score_dates}<text x="1058" y="495" text-anchor="end">交易日期</text></svg>'
+        f'<p class="note"><span class="tone tone-cold-deep">0–25 极冷</span> · <span class="tone tone-cold">26–45 偏冷</span> · <span class="tone tone-neutral">46–60 中性</span> · <span class="tone tone-hot">61–75 偏热</span> · <span class="tone tone-hot-deep">76–100 过热</span> · 点击折线数据点查看当日数值</p>'
+        f'<p class="note">{summary}</p></section>'
+        f'<section><h2>强弱分项</h2>{"".join(component_html)}<p class="note">缺失分项不按零分处理，综合分会按实际可用权重重新归一化。</p></section></div>'
+        f'<div class="grid trend-grid">'
+        f'<section><h2>市场广度趋势</h2><svg viewBox="0 0 1080 290"><line class="axis" x1="56" y1="24" x2="1058" y2="24"/><line class="axis" x1="56" y1="138" x2="1058" y2="138"/><line class="axis" x1="56" y1="252" x2="1058" y2="252"/><text x="4" y="28">100</text><text x="12" y="142">50</text><text x="20" y="256">0</text><path class="score" d="{breadth_path}"/>{breadth_clicks}{breadth_extrema}{breadth_dates}</svg><p class="note">0–100分 · 涨跌家数、MA20/MA60、新高新低与10日腾落趋势 · 点击折线数据点查看当日数值 · {breadth_latest}</p></section>'
+        f'<section><h2>短线赚钱效应趋势</h2><svg viewBox="0 0 1080 290"><line class="axis" x1="56" y1="24" x2="1058" y2="24"/><line class="axis" x1="56" y1="138" x2="1058" y2="138"/><line class="axis" x1="56" y1="252" x2="1058" y2="252"/><text x="4" y="28">100</text><text x="12" y="142">50</text><text x="20" y="256">0</text><path class="mean" d="{short_path}"/>{short_clicks}{short_extrema}{short_dates}</svg><p class="note">0–100分 · 昨涨停收益、晋级率、封板率、涨跌停强弱与连板高度 · 点击折线数据点查看当日数值 · {short_latest}</p></section>'
+        f'</div>'
+    )
+
+    sentiment_cards_row2 = (
+        '<div class="cards cards-row-2">'
+        '<div class="card card-rich">'
+        '<div class="card-head"><small>综合情绪</small><a class="card-more" href="/sentiment-120d/">近120日趋势 →</a></div>'
+        f'<div class="card-hero"><div class="value tone {score_tone(last.sentiment_score)}">{score}</div>'
+        f'<div class="card-hero-meta"><span class="tone {score_tone(last.sentiment_score)}">{last.sentiment_state}</span>{score_diff_html}<small>可用分项 {int(last.available_components)}/{len(COMPONENTS)}</small></div></div>'
+        f'<div class="card-sub-grid">{sub_pills_html}</div>'
+        f'<p class="card-footnote">{summary}</p>'
+        '</div>'
+        '<div class="card card-rich">'
+        '<div class="card-head"><small>市场阶段</small><a class="card-more" href="/sentiment-120d/">强弱分项与趋势 →</a></div>'
+        f'<div class="value tone {mom_tone}" style="font-size:24px;line-height:1.3;margin:6px 0 10px">{last.market_phase}</div>'
+        '<div class="phase-bars">'
+        f'<div class="phase-bar-row"><div class="phase-bar-head"><span>结构分（广度+量能+资金+短线）</span><strong class="tone {struct_tone}">{last.structural_score:.0f} · {last.structural_state}</strong></div><div class="bar"><i style="width:{max(0.0, min(100.0, struct_val)):.1f}%"></i></div></div>'
+        f'<div class="phase-bar-row"><div class="phase-bar-head"><span>动量分（个股与指数强弱动能）</span><strong class="tone {mom_tone}">{last.momentum_score:.0f} · {last.momentum_state}</strong></div><div class="bar"><i style="width:{max(0.0, min(100.0, mom_val)):.1f}%;background:#ec8b00"></i></div></div>'
+        '</div>'
+        f'<p class="card-footnote">广度：{breadth_latest} · 短线：{short_latest}</p>'
+        '</div>'
+        '</div>'
+    )
     doc = f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>A股市场情绪仪表盘</title><style>
 body{{margin:0;background:#f6f8fb;color:#182b49;font:14px -apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif}}main{{max-width:1140px;margin:auto;padding:28px 20px 48px}}h1{{margin:0;font-size:27px}}.sub,small,.note{{color:#68778d}}.cards,.grid{{display:grid;gap:14px}}.cards{{grid-template-columns:repeat(auto-fit,minmax(190px,1fr));margin:14px 0}}.grid{{grid-template-columns:2fr 1fr}}.trend-grid{{grid-template-columns:1fr;margin:14px 0}}.trend-grid>section:first-child{{grid-column:auto}}.card,section{{box-sizing:border-box;background:#fff;border:1px solid #e6edf5;border-radius:12px;padding:18px}}.value{{font-size:30px;font-weight:700;margin:7px 0}}h2{{font-size:16px;margin:0 0 12px}}svg{{width:100%;display:block}}.axis{{stroke:#dfe7f0}}.score{{fill:none;stroke:#5a4fcf;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}}.score-halo{{fill:none;stroke:#fff;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:.78}}.sentiment-band-cold-deep{{fill:#087f5b;opacity:.16}}.sentiment-band-cold{{fill:#3b9b63;opacity:.12}}.sentiment-band-neutral{{fill:#f4c95d;opacity:.20}}.sentiment-band-hot{{fill:#df655f;opacity:.12}}.sentiment-band-hot-deep{{fill:#b42318;opacity:.16}}.sentiment-band-label{{font-size:12px;font-weight:700;text-anchor:end;opacity:.78}}.amount{{fill:none;stroke:#2869b2;stroke-width:2}}.mean{{fill:none;stroke:#ec8b00;stroke-width:2}}.tone{{font-weight:700}}.tone-cold-deep{{color:#087f5b}}.tone-cold{{color:#3b9b63}}.tone-neutral{{color:#b47b00}}.tone-hot{{color:#df655f}}.tone-hot-deep{{color:#b42318}}.tone-missing{{color:#8a96a8}}.amount-compare{{display:block;margin-top:7px;font-weight:700;line-height:1.45}}.volume-up{{color:#b42318}}.volume-down{{color:#087f5b}}.rise{{color:#e5484d}}.fall{{color:#19a665}}.index-market,.distribution-market,.industry-market,.hot-rankings{{margin-top:20px}}.section-head{{display:flex;align-items:baseline;justify-content:space-between;gap:12px}}.section-head h2{{margin-bottom:12px}}.index-grid{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}}.index-card{{box-sizing:border-box;border:1px solid transparent;border-radius:10px;padding:15px 14px 10px;min-width:0}}.index-value{{font-size:24px;font-weight:750;line-height:1.1;font-variant-numeric:tabular-nums}}.index-meta{{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-top:7px;white-space:nowrap}}.index-meta span{{color:#223047}}.index-meta b{{font-size:13px}}.index-spark{{height:58px;margin-top:10px}}.index-spark path{{fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}}.market-up{{color:#e5484d;background:#fff5f5;border-color:#ffe3e3}}.market-down{{color:#19a665;background:#f2fbf7;border-color:#dff5e8}}.market-flat{{color:#b47b00;background:#fff9e8;border-color:#f9edbd}}.distribution-bars{{height:180px;display:grid;grid-template-columns:repeat(11,minmax(0,1fr));gap:7px;align-items:end;border-bottom:1px solid #dfe7f0;padding:0 5px}}.distribution-bin{{height:175px;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;min-width:0}}.distribution-bin b{{font-size:12px;font-variant-numeric:tabular-nums;margin-bottom:5px}}.distribution-bin i{{display:block;width:min(34px,75%);min-height:4px;border-radius:6px 6px 2px 2px}}.distribution-bin span{{height:27px;margin-top:6px;font-size:11px;color:#68778d;white-space:nowrap}}.bin-up b{{color:#e5484d}}.bin-up i{{background:#e5484d}}.bin-down b{{color:#19a665}}.bin-down i{{background:#19a665}}.bin-flat b{{color:#8a96a8}}.bin-flat i{{background:#aeb8c5}}.distribution-progress{{margin-top:13px}}.distribution-progress-labels{{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:14px;font-variant-numeric:tabular-nums}}.distribution-progress-labels span{{color:#68778d}}.distribution-track{{display:flex;width:100%;height:9px;margin-top:8px;background:#edf1f6;border-radius:7px;overflow:hidden}}.distribution-track i{{display:block;height:100%;min-width:1px}}.progress-rise{{background:#e5484d}}.progress-flat{{background:#aeb8c5}}.progress-fall{{background:#19a665}}.market-kpis{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:16px}}.market-kpis article{{border:1px solid #e6edf5;border-radius:10px;padding:14px;min-width:0;background:#fbfcfe}}.market-kpis article>div{{font-size:22px;font-weight:750;margin:8px 0;font-variant-numeric:tabular-nums}}.market-kpis article>small:last-child{{display:block;line-height:1.45}}.dragon-tiger-date{{display:block;margin-top:3px;font-size:11px}}.market-kpis .dragon-tiger-columns{{display:grid;grid-template-columns:minmax(0,1fr) 52px 78px;gap:5px;margin:10px 0 2px;font-size:10px;font-weight:500;color:#8a96a8}}.dragon-tiger-columns span:nth-child(n+2){{text-align:right}}.dragon-tiger-list{{list-style:none;margin:0;padding:0}}.dragon-tiger-list li{{display:grid;grid-template-columns:minmax(0,1fr) 52px 78px;align-items:center;gap:5px;padding:6px 0;border-top:1px solid #edf1f6;font-size:11px;font-variant-numeric:tabular-nums}}.dragon-tiger-list li>span:nth-child(n+2){{text-align:right;white-space:nowrap;font-weight:700}}.dragon-tiger-name{{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;color:#223047}}.dragon-tiger-name i{{display:inline-grid;place-items:center;width:16px;height:16px;margin-right:4px;border-radius:4px;background:#edf1f6;color:#68778d;font-size:9px;font-style:normal}}.market-kpis .dragon-tiger-empty{{margin:18px 0 0;font-size:13px;font-weight:500;color:#8a96a8}}.industry-block+ .industry-block{{margin-top:18px}}.industry-block h3{{display:flex;align-items:center;gap:7px;margin:4px 0 10px;font-size:14px}}.industry-block h3 span{{width:9px;height:9px;border-radius:50%}}.heat-up-dot{{background:#e5484d}}.heat-down-dot{{background:#19a665}}.industry-heatmap{{position:relative;height:300px;border:1px solid #edf1f6;border-radius:9px;overflow:hidden;background:#f3f6fa}}.industry-tile{{position:absolute;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;border:2px solid #fff;border-radius:7px;padding:10px;text-align:center;overflow:hidden;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.55);container-type:size;transition:filter .15s ease,transform .15s ease}}.industry-tile:hover{{z-index:2;filter:saturate(1.1) brightness(.96);box-shadow:0 4px 14px rgba(24,43,73,.18)}}.industry-tile-label{{display:flex;min-width:0;flex-direction:column;align-items:center;justify-content:center}}.industry-tile b{{max-width:100%;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.industry-tile strong{{font-size:19px;margin-top:7px;font-variant-numeric:tabular-nums}}@container (max-width:70px){{.industry-tile b{{font-size:11px}}.industry-tile strong{{font-size:14px;margin-top:4px}}}}@container (max-width:45px){{.industry-tile-label{{display:none}}}}@container (max-height:32px){{.industry-tile-label{{display:none}}}}.hot-rank-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}.hot-panel{{min-width:0;border:1px solid #e6edf5;border-radius:10px;background:#fbfcfe}}.hot-panel-head{{display:flex;align-items:baseline;justify-content:space-between;padding:13px 14px 8px}}.hot-panel-head h3{{margin:0;font-size:15px}}.hot-table-wrap{{max-height:650px;overflow:auto}}.hot-table{{font-size:12px;table-layout:fixed}}.hot-table th{{position:sticky;top:0;z-index:1;background:#f5f7fa}}.hot-table th:nth-child(1){{width:36px}}.hot-table th:nth-child(2){{width:80px}}.hot-table th:nth-child(3){{width:58px}}.hot-table th:nth-child(4){{width:50px}}.hot-table td{{vertical-align:top}}.rank-badge{{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:6px;color:#8a96a8;background:#edf1f6}}.rank-top{{color:#fff;background:#ef4444}}.stock-code{{display:block;margin-top:3px;font-size:10px}}.hot-number{{font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}}.hot-reason{{line-height:1.45;overflow:hidden}}.hot-reason span{{display:inline-block;max-width:100%;margin:0 4px 4px 0;padding:2px 5px;border:1px solid #dde5ef;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#536278;background:#fff}}.hot-reason span:first-child{{color:#d33d43;border-color:#f3c6c8;background:#fff7f7}}.hot-reason .reason-missing{{color:#8a96a8;border-color:#dde5ef;background:#fff}}.hot-empty{{padding:28px;text-align:center;color:#8a96a8}}.component{{margin:17px 0}}.component strong{{float:right}}.definition{{display:block;margin-top:7px;line-height:1.55}}.bar{{clear:both;height:9px;background:#edf1f6;border-radius:8px;margin:8px 0}}.bar i{{display:block;height:100%;background:#2869b2;border-radius:8px}}table{{width:100%;border-collapse:collapse}}td,th{{padding:9px 6px;text-align:left;border-bottom:1px solid #edf1f6}}th{{color:#68778d;font-weight:500}}.note{{font-size:12px;line-height:1.6}}@media(max-width:900px){{.index-grid{{grid-template-columns:repeat(3,1fr)}}.market-kpis{{grid-template-columns:repeat(2,1fr)}}.hot-rank-grid{{grid-template-columns:1fr}}}}@media(max-width:720px){{.cards,.grid{{grid-template-columns:1fr 1fr}}.grid>section:first-child{{grid-column:span 2}}.trend-grid{{grid-template-columns:1fr}}.trend-grid>section:first-child{{grid-column:auto}}.index-grid{{grid-template-columns:repeat(2,1fr)}}.section-head{{display:block}}.distribution-bars{{gap:3px}}.distribution-bin span{{font-size:10px;transform:rotate(-35deg);transform-origin:top center;margin-top:9px}}.distribution-progress-labels{{font-size:12px;gap:5px}}.industry-heatmap{{height:330px}}.industry-tile{{padding:7px}}.industry-tile b{{font-size:12px}}.industry-tile strong{{font-size:15px;margin-top:4px}}.hot-table-wrap{{max-height:520px}}}}@media(max-width:450px){{.cards,.grid,.index-grid,.market-kpis{{grid-template-columns:1fr}}.grid>section:first-child{{grid-column:auto}}.hot-table thead{{display:none}}.hot-table,.hot-table tbody{{display:block}}.hot-table tr{{display:grid;grid-template-columns:34px minmax(0,1fr) 64px 58px;padding:8px 5px;border-bottom:1px solid #edf1f6}}.hot-table td{{display:block;padding:4px;border:0;min-width:0}}.hot-table td:nth-child(5){{grid-column:2/5;padding-top:0}}}}</style><main>
-<style>.extrema-dot{{stroke:#fff;stroke-width:2;pointer-events:none}}.extrema-text{{font-size:11px;font-weight:750;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;pointer-events:none}}.extrema-score{{fill:#5a4fcf}}.extrema-amount{{fill:#2869b2}}.extrema-mean{{fill:#d97706}}.chart-hit{{fill:transparent;stroke:transparent;stroke-width:2;cursor:pointer;outline:none}}.chart-hit-score:hover,.chart-hit-score:focus{{fill:#5a4fcf;stroke:#fff}}.chart-hit-amount:hover,.chart-hit-amount:focus{{fill:#2869b2;stroke:#fff}}.chart-hit-mean:hover,.chart-hit-mean:focus{{fill:#d97706;stroke:#fff}}.turnover-bar{{shape-rendering:geometricPrecision;cursor:pointer;outline:none}}.turnover-bar:hover,.turnover-bar:focus{{opacity:1;stroke:#fff;stroke-width:1.5}}.turnover-bar-up{{fill:#e5484d;opacity:.82}}.turnover-bar-down{{fill:#19a665;opacity:.82}}.turnover-bar-flat{{fill:#aeb8c5;opacity:.75}}.chart-data-popover{{position:fixed;z-index:200;width:max-content;max-width:min(300px,calc(100vw - 24px));padding:12px 34px 12px 14px;border:1px solid #d9e2ed;border-radius:10px;background:rgba(255,255,255,.98);box-shadow:0 8px 28px rgba(24,43,73,.22);color:#182b49;pointer-events:auto}}.chart-data-popover[hidden]{{display:none}}.chart-data-popover b,.chart-data-popover strong,.chart-data-popover span{{display:block}}.chart-data-popover b{{font-size:13px}}.chart-data-popover small{{display:block;margin-top:3px}}.chart-data-popover strong{{margin-top:7px;font-size:20px;font-variant-numeric:tabular-nums}}.chart-data-popover span{{margin-top:5px;color:#68778d;font-size:12px}}.chart-data-popover button{{position:absolute;top:5px;right:7px;border:0;background:transparent;color:#7c899a;font-size:20px;line-height:1;cursor:pointer}}.hot-plate-tabs{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;padding:0 12px 12px}}.hot-plate-tabs button{{appearance:none;border:1px solid #e3e9f1;border-radius:8px;padding:9px 6px;background:#f4f6f9;color:#59677c;font:inherit;font-weight:700;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease}}.hot-plate-tabs button:hover{{border-color:#f0a8ab;background:#fff7f7}}.hot-plate-tabs button[aria-selected="true"]{{border-color:#f3b4b7;background:#fff0f1;color:#d93f45;box-shadow:inset 0 -2px 0 #e5484d}}.hot-plate-tabs button small{{margin-left:4px;color:inherit;font-size:10px;font-weight:600}}.hot-plate-view[hidden]{{display:none}}@media(max-width:450px){{.hot-plate-tabs{{gap:4px;padding:0 7px 9px}}.hot-plate-tabs button{{padding:8px 3px;font-size:12px}}}}</style>
+<style>.extrema-dot{{stroke:#fff;stroke-width:2;pointer-events:none}}.extrema-text{{font-size:11px;font-weight:750;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;pointer-events:none}}.extrema-score{{fill:#5a4fcf}}.extrema-amount{{fill:#2869b2}}.extrema-mean{{fill:#d97706}}.chart-hit{{fill:transparent;stroke:transparent;stroke-width:2;cursor:pointer;outline:none}}.chart-hit-score:hover,.chart-hit-score:focus{{fill:#5a4fcf;stroke:#fff}}.chart-hit-amount:hover,.chart-hit-amount:focus{{fill:#2869b2;stroke:#fff}}.chart-hit-mean:hover,.chart-hit-mean:focus{{fill:#d97706;stroke:#fff}}.turnover-bar{{shape-rendering:geometricPrecision;cursor:pointer;outline:none}}.turnover-bar:hover,.turnover-bar:focus{{opacity:1;stroke:#fff;stroke-width:1.5}}.turnover-bar-up{{fill:#e5484d;opacity:.82}}.turnover-bar-down{{fill:#19a665;opacity:.82}}.turnover-bar-flat{{fill:#aeb8c5;opacity:.75}}.chart-data-popover{{position:fixed;z-index:200;width:max-content;max-width:min(300px,calc(100vw - 24px));padding:12px 34px 12px 14px;border:1px solid #d9e2ed;border-radius:10px;background:rgba(255,255,255,.98);box-shadow:0 8px 28px rgba(24,43,73,.22);color:#182b49;pointer-events:auto}}.chart-data-popover.is-hover-tip{{pointer-events:none}}.chart-data-popover[hidden]{{display:none}}.chart-data-popover b,.chart-data-popover strong,.chart-data-popover span{{display:block}}.chart-data-popover b{{font-size:13px}}.chart-data-popover small{{display:block;margin-top:3px}}.chart-data-popover strong{{margin-top:7px;font-size:20px;font-variant-numeric:tabular-nums}}.chart-data-popover span{{margin-top:5px;color:#68778d;font-size:12px}}.chart-data-popover button{{position:absolute;top:5px;right:7px;border:0;background:transparent;color:#7c899a;font-size:20px;line-height:1;cursor:pointer}}.hot-plate-tabs{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;padding:0 12px 12px}}.hot-plate-tabs button{{appearance:none;border:1px solid #e3e9f1;border-radius:8px;padding:9px 6px;background:#f4f6f9;color:#59677c;font:inherit;font-weight:700;cursor:pointer;transition:background .15s ease,border-color .15s ease,color .15s ease}}.hot-plate-tabs button:hover{{border-color:#f0a8ab;background:#fff7f7}}.hot-plate-tabs button[aria-selected="true"]{{border-color:#f3b4b7;background:#fff0f1;color:#d93f45;box-shadow:inset 0 -2px 0 #e5484d}}.hot-plate-tabs button small{{margin-left:4px;color:inherit;font-size:10px;font-weight:600}}.hot-plate-view[hidden]{{display:none}}@media(max-width:450px){{.hot-plate-tabs{{gap:4px;padding:0 7px 9px}}.hot-plate-tabs button{{padding:8px 3px;font-size:12px}}}}</style>
 <style>
 .industry-tile{{padding:4px}}
 .industry-tile-label{{display:flex;width:100%;min-width:0}}
@@ -2283,7 +2931,7 @@ body{{margin:0;background:#f6f8fb;color:#182b49;font:14px -apple-system,BlinkMac
 @container (max-height:24px){{.industry-tile-label{{display:none}}}}
 </style>
 <style>
-.valuation-market{{margin-top:20px}}.valuation-report-link{{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:4px 0 14px;padding:15px 18px;border:1px solid #cdd9f0;border-radius:10px;background:linear-gradient(135deg,#f8faff,#eef3ff);color:#182b49;text-decoration:none;transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}}.valuation-report-link:hover{{transform:translateY(-1px);border-color:#9fb5e8;box-shadow:0 6px 18px rgba(43,92,217,.10)}}.valuation-report-link span{{display:flex;min-width:0;flex-direction:column;gap:4px}}.valuation-report-link b{{font-size:15px}}.valuation-report-link small{{line-height:1.5}}.valuation-report-link>strong{{flex:none;color:#2b5cd9;white-space:nowrap}}.valuation-chart text{{font-size:11px;fill:#68778d}}.valuation-zone-high{{fill:#e5484d;opacity:.08}}.valuation-zone-low{{fill:#19a665;opacity:.08}}.valuation-p80{{stroke:#d85b61;stroke-width:1.4;stroke-dasharray:7 5}}.valuation-p20{{stroke:#2f9e70;stroke-width:1.4;stroke-dasharray:7 5}}.valuation-line-label{{font-weight:750;paint-order:stroke;stroke:#fff;stroke-width:3px}}.valuation-high{{fill:#c13e44!important}}.valuation-low{{fill:#21845c!important}}.valuation-halo{{fill:none;stroke:#fff;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:.82}}.valuation-pe{{fill:none;stroke:#2869b2;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}}.valuation-latest{{fill:#2869b2;stroke:#fff;stroke-width:2}}.valuation-current{{fill:#2869b2!important;font-weight:750;paint-order:stroke;stroke:#fff;stroke-width:3px}}.extrema-valuation{{fill:#2869b2}}.valuation-warning{{color:#b47b00}}@media(max-width:720px){{.valuation-market{{padding:13px}}.valuation-report-link{{align-items:flex-start;flex-direction:column;gap:9px;padding:13px}}}}
+.valuation-market{{margin-top:20px}}.valuation-report-link{{display:flex;align-items:center;justify-content:space-between;gap:18px;margin:4px 0 14px;padding:15px 18px;border:1px solid #cdd9f0;border-radius:10px;background:linear-gradient(135deg,#f8faff,#eef3ff);color:#182b49;text-decoration:none;transition:transform .15s ease,border-color .15s ease,box-shadow .15s ease}}.valuation-report-link:hover{{transform:translateY(-1px);border-color:#9fb5e8;box-shadow:0 6px 18px rgba(43,92,217,.10)}}.valuation-report-link span{{display:flex;min-width:0;flex-direction:column;gap:4px}}.valuation-report-link b{{font-size:15px}}.valuation-report-link small{{line-height:1.5}}.valuation-report-link>strong{{flex:none;color:#2b5cd9;white-space:nowrap}}.valuation-chart text{{font-size:11px;fill:#68778d}}.valuation-zone-high{{fill:#e5484d;opacity:.08}}.valuation-zone-low{{fill:#19a665;opacity:.08}}.valuation-p80{{stroke:#d85b61;stroke-width:1.4;stroke-dasharray:7 5}}.valuation-p20{{stroke:#2f9e70;stroke-width:1.4;stroke-dasharray:7 5}}.valuation-line-label{{font-weight:750;paint-order:stroke;stroke:#fff;stroke-width:3px}}.valuation-high{{fill:#c13e44!important}}.valuation-low{{fill:#21845c!important}}.valuation-halo{{fill:none;stroke:#fff;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:.82}}.valuation-pe{{fill:none;stroke:#2869b2;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}}.valuation-latest{{fill:#2869b2;stroke:#fff;stroke-width:2}}.valuation-current{{fill:#2869b2!important;font-weight:750;paint-order:stroke;stroke:#fff;stroke-width:3px}}.extrema-valuation{{fill:#2869b2}}.valuation-warning{{color:#b47b00}}.capital-chart-head{{align-items:center;margin-bottom:8px}}.capital-chart-head h2{{margin-bottom:0}}.capital-chart-tools{{display:flex;align-items:center;gap:10px;font-size:12px;color:#68778d;font-variant-numeric:tabular-nums}}.capital-chart-tools button{{appearance:none;border:1px solid #d5e0ee;border-radius:6px;padding:3px 10px;background:#f7faff;color:#2869b2;font:inherit;font-weight:600;cursor:pointer}}.capital-chart-tools button:hover{{border-color:#9fb5e8;background:#edf3ff}}.capital-zoom-svg{{user-select:none;-webkit-user-select:none;cursor:crosshair}}.capital-zoom-svg.is-zoomed{{cursor:grab}}.capital-zoom-svg.is-dragging{{cursor:grabbing}}.capital-crosshair{{stroke:#94a3b8;stroke-width:1;stroke-dasharray:4 3;pointer-events:none}}.capital-focus-dot{{stroke:#fff;stroke-width:2;pointer-events:none}}.capital-focus-dot.amount-dot{{fill:#2869b2}}.capital-focus-dot.mean-dot{{fill:#ec8b00}}.entry-metrics{{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;margin-top:3px;font-variant-numeric:tabular-nums}}.entry-metrics em{{font-style:normal}}.entry-date{{color:#64748b;font-size:12px}}.entry-tag{{font-weight:700;color:#1e293b;margin-right:3px}}.entry-val{{font-weight:750;font-size:13px}}.entry-pill{{display:inline-flex;align-items:center;padding:1px 7px;border-radius:999px;font-size:11px;font-weight:700;line-height:1.5}}.entry-group{{display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px}}.entry-sep{{color:#cbd5e1;font-weight:700}}.cards-row-2{{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:0}}.card-rich{{display:flex;flex-direction:column;gap:8px}}.card-head{{display:flex;align-items:center;justify-content:space-between;gap:8px}}.card-more{{font-size:12px;color:#2869b2;text-decoration:none;font-weight:600}}.card-more:hover{{text-decoration:underline}}.card-hero{{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}}.card-hero .value{{margin:2px 0}}.card-hero-meta{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}}.card-diff{{font-style:normal;font-size:12px;font-weight:700;padding:1px 7px;border-radius:999px;background:#f1f5f9}}.card-sub-grid{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:4px}}.card-sub-item{{background:#f8fafd;border:1px solid #edf2f7;border-radius:8px;padding:7px 8px;display:flex;flex-direction:column;gap:2px}}.card-sub-item span{{font-size:11px;color:#68778d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.card-sub-item small{{font-size:10px;margin-left:2px;color:#94a3b8}}.card-sub-item strong{{font-size:16px;font-variant-numeric:tabular-nums}}.phase-bars{{display:flex;flex-direction:column;gap:8px}}.phase-bar-head{{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:#475569}}.phase-bar-row .bar{{margin:5px 0 0;height:8px}}.card-footnote{{margin:4px 0 0;font-size:12px;line-height:1.55;color:#68778d}}@media(max-width:720px){{.cards-row-2{{grid-template-columns:1fr}}.card-sub-grid{{grid-template-columns:repeat(3,minmax(0,1fr))}}.valuation-market{{padding:13px}}.valuation-report-link{{align-items:flex-start;flex-direction:column;gap:9px;padding:13px}}}}
 </style>
 {WATCHLIST_CSS}
 <h1>A股市场情绪仪表盘</h1><p class="sub">{subtitle}</p>
@@ -2291,23 +2939,66 @@ body{{margin:0;background:#f6f8fb;color:#182b49;font:14px -apple-system,BlinkMac
 {market_distribution_html}
 {industry_heatmap_html}
 {hot_rankings_html}
-<div class="cards"><div class="card"><small>综合情绪</small><div class="value tone {score_tone(last.sentiment_score)}">{score}</div><small><span class="tone {score_tone(last.sentiment_score)}">{last.sentiment_state}</span> · 可用分项 {int(last.available_components)}/{len(COMPONENTS)}</small></div><div class="card"><small>市场阶段</small><div class="value tone {score_tone(last.momentum_score)}" style="font-size:21px;line-height:1.35">{last.market_phase}</div><small>结构 {last.structural_score:.0f} · {last.structural_state} / 动量 {last.momentum_score:.0f} · {last.momentum_state}</small></div><div class="card"><small>{'盘中累计成交额' if is_intraday else '日成交额'}</small><div class="value">{amount_value}</div><small>{amount_detail}</small>{amount_comparison}</div><div class="card"><small>量比（相对20日）</small><div class="value">{last.vs_ma20:.2f}×</div><small>{last.liquidity_state}{' · 盘中投影' if is_intraday else ''}</small></div><div class="card"><small>数据覆盖</small><div class="value">{last.coverage_weight_pct:.0f}%</div><small>{'五项均为盘中可用，其中资金为代理' if is_intraday else '综合分只使用已接入分项'}</small></div>{proxy_card}</div>
-<div class="grid"><section><h2>近120日综合情绪</h2><svg class="sentiment-chart" viewBox="0 0 1080 500" role="img" aria-label="近120日综合情绪，背景按极冷、偏冷、中性、偏热和过热分级"><rect class="sentiment-band-hot-deep" x="56" y="26" width="1002" height="103"/><rect class="sentiment-band-hot" x="56" y="129" width="1002" height="61.8"/><rect class="sentiment-band-neutral" x="56" y="190.8" width="1002" height="61.8"/><rect class="sentiment-band-cold" x="56" y="252.6" width="1002" height="82.4"/><rect class="sentiment-band-cold-deep" x="56" y="335" width="1002" height="103"/><line class="axis" x1="56" y1="438" x2="1058" y2="438"/><line class="axis" x1="56" y1="335" x2="1058" y2="335"/><line class="axis" x1="56" y1="252.6" x2="1058" y2="252.6"/><line class="axis" x1="56" y1="190.8" x2="1058" y2="190.8"/><line class="axis" x1="56" y1="129" x2="1058" y2="129"/><line class="axis" x1="56" y1="26" x2="1058" y2="26"/><text x="20" y="442">0</text><text x="12" y="339">25</text><text x="12" y="257">45</text><text x="12" y="195">60</text><text x="12" y="133">75</text><text x="4" y="30">100</text><text class="sentiment-band-label" x="1046" y="82" fill="#8f1919">过热 76–100</text><text class="sentiment-band-label" x="1046" y="164" fill="#b6403c">偏热 61–75</text><text class="sentiment-band-label" x="1046" y="225" fill="#8a6500">中性 46–60</text><text class="sentiment-band-label" x="1046" y="298" fill="#26784e">偏冷 26–45</text><text class="sentiment-band-label" x="1046" y="390" fill="#075f45">极冷 0–25</text><path class="score-halo" d="{score_path}"/><path class="score" d="{score_path}"/>{score_clicks}{score_extrema}{score_dates}<text x="1058" y="495" text-anchor="end">交易日期</text></svg><p class="note"><span class="tone tone-cold-deep">0–25 极冷</span> · <span class="tone tone-cold">26–45 偏冷</span> · <span class="tone tone-neutral">46–60 中性</span> · <span class="tone tone-hot">61–75 偏热</span> · <span class="tone tone-hot-deep">76–100 过热</span> · 点击折线数据点查看当日数值</p><p class="note">{summary}</p></section><section><h2>强弱分项</h2>{''.join(component_html)}<p class="note">缺失分项不按零分处理，综合分会按实际可用权重重新归一化。</p></section></div>
-<div class="grid trend-grid"><section><h2>市场广度趋势</h2><svg viewBox="0 0 1080 290"><line class="axis" x1="56" y1="24" x2="1058" y2="24"/><line class="axis" x1="56" y1="138" x2="1058" y2="138"/><line class="axis" x1="56" y1="252" x2="1058" y2="252"/><text x="4" y="28">100</text><text x="12" y="142">50</text><text x="20" y="256">0</text><path class="score" d="{breadth_path}"/>{breadth_clicks}{breadth_extrema}{breadth_dates}</svg><p class="note">0–100分 · 涨跌家数、MA20/MA60、新高新低与10日腾落趋势 · 点击折线数据点查看当日数值 · {breadth_latest}</p></section><section><h2>短线赚钱效应趋势</h2><svg viewBox="0 0 1080 290"><line class="axis" x1="56" y1="24" x2="1058" y2="24"/><line class="axis" x1="56" y1="138" x2="1058" y2="138"/><line class="axis" x1="56" y1="252" x2="1058" y2="252"/><text x="4" y="28">100</text><text x="12" y="142">50</text><text x="20" y="256">0</text><path class="mean" d="{short_path}"/>{short_clicks}{short_extrema}{short_dates}</svg><p class="note">0–100分 · 昨涨停收益、晋级率、封板率、涨跌停强弱与连板高度 · 点击折线数据点查看当日数值 · {short_latest}</p></section></div>
-<section><h2>资金风险偏好：沪深两市融资余额走势</h2><svg viewBox="0 0 1080 290"><line class="axis" x1="56" y1="24" x2="1058" y2="24"/><line class="axis" x1="56" y1="138" x2="1058" y2="138"/><line class="axis" x1="56" y1="252" x2="1058" y2="252"/><text x="4" y="28">{capital_max:.0f}</text><text x="4" y="142">{capital_mid:.0f}</text><text x="4" y="256">{capital_min:.0f}</text><path class="amount" d="{capital_path}"/><path class="mean" d="{capital_ma20_path}"/>{capital_clicks}{capital_ma20_clicks}{capital_extrema}{capital_dates}<text x="65" y="14" fill="#2869b2">沪深融资余额</text><text x="175" y="14" fill="#ec8b00">20日均线</text></svg><p class="note">{capital_note}</p></section>
+<div class="cards"><div class="card"><small>{'盘中累计成交额' if is_intraday else '日成交额'}</small><div class="value">{amount_value}</div><small>{amount_detail}</small>{amount_comparison}</div><div class="card"><small>量比（相对20日）</small><div class="value">{last.vs_ma20:.2f}×</div><small>{last.liquidity_state}{' · 盘中投影' if is_intraday else ''}</small></div><div class="card"><small>数据覆盖</small><div class="value">{last.coverage_weight_pct:.0f}%</div><small>{'五项均为盘中可用，其中资金为代理' if is_intraday else '综合分只使用已接入分项'}</small></div>{proxy_card}</div>
+{sentiment_cards_row2}
+<section class="capital-chart-section"><div class="section-head capital-chart-head"><h2>资金风险偏好：沪深两市融资余额走势</h2><div class="capital-chart-tools"><span data-capital-range>{capital_range_text}</span><button type="button" data-capital-reset hidden>重置视图</button></div></div><svg id="capital-margin-svg" class="capital-zoom-svg" viewBox="0 0 1080 290"><line class="axis" x1="56" y1="24" x2="1058" y2="24"/><line class="axis" x1="56" y1="138" x2="1058" y2="138"/><line class="axis" x1="56" y1="252" x2="1058" y2="252"/><text x="4" y="28" data-capital-ymax>{capital_max:.0f}</text><text x="4" y="142" data-capital-ymid>{capital_mid:.0f}</text><text x="4" y="256" data-capital-ymin>{capital_min:.0f}</text><path class="amount" data-capital-line d="{capital_path}"/><path class="mean" data-capital-ma20 d="{capital_ma20_path}"/><line class="capital-crosshair" data-capital-crosshair x1="0" y1="24" x2="0" y2="252" hidden/><circle class="capital-focus-dot amount-dot" data-capital-dot-balance r="4.5" hidden/><circle class="capital-focus-dot mean-dot" data-capital-dot-ma20 r="4.5" hidden/><g data-capital-extrema>{capital_extrema}</g><g data-capital-dates>{capital_dates}</g><text x="65" y="14" fill="#2869b2">沪深融资余额</text><text x="175" y="14" fill="#ec8b00">20日均线</text></svg><script type="application/json" id="capital-margin-data">{capital_payload_json}</script><p class="note">{capital_note}</p></section>
 <section><h2>近120日日成交额与20日均额</h2><svg viewBox="0 0 1080 315"><line class="axis" x1="56" y1="24" x2="1058" y2="24"/><line class="axis" x1="56" y1="138" x2="1058" y2="138"/><line class="axis" x1="56" y1="252" x2="1058" y2="252"/><text x="4" y="14">成交额（万亿元）</text><text x="4" y="28">{amount_max/10000:.2f}</text><text x="4" y="142">{amount_max/20000:.2f}</text><text x="20" y="256">0</text>{amount_bars}<path class="mean" d="{ma_path}"/>{amount_ma_clicks}{amount_extrema}{amount_dates}<text x="1058" y="307" text-anchor="end">交易日期</text><rect class="turnover-bar-up" x="162" y="5" width="10" height="9"/><text x="177" y="14">较昨日放量</text><rect class="turnover-bar-down" x="260" y="5" width="10" height="9"/><text x="275" y="14">较昨日缩量</text><line x1="365" y1="10" x2="385" y2="10" stroke="#ec8b00" stroke-width="2"/><text x="390" y="14" fill="#b36b00">20日均额</text></svg><p class="note">横轴：交易日期 · 纵轴：沪深A股成交额（万亿元）· 红柱=较上一交易日放量 · 绿柱=较上一交易日缩量 · 灰柱=持平或无可比数据。盘中当日柱按上一交易日同一时点的成交进度投影，已纳入集合竞价。点击柱子或均线数据点查看当日数值。</p></section>
 <section><h2>最近30个交易日综合分、量比与状态</h2><table><thead><tr><th>日期</th><th>成交额</th><th>量比</th><th>综合分</th><th>状态</th><th>市场阶段</th></tr></thead><tbody>{rows}</tbody></table></section><p class="note">量比＝当日成交额÷20日平均成交额；表格按日期倒序排列。{source_note} 成交额反映参与度，不单独代表涨跌方向。</p>
 {valuation_html}
+<div style="margin-top:18px">{sentiment_120d_entry_html}{fear_greed_entry_html}{equity_bond_entry_html}{buffett_entry_html}</div>
 <div id="chart-data-popover" class="chart-data-popover" role="status" aria-live="polite" hidden><button type="button" data-chart-popup-close aria-label="关闭">×</button><b data-chart-popup-series></b><small data-chart-popup-date></small><strong data-chart-popup-value></strong><span data-chart-popup-extra hidden></span></div>
 <script>document.querySelectorAll("[data-hot-plate-tab]").forEach(function(button){{button.addEventListener("click",function(){{var panel=button.closest(".hot-plate-panel");var key=button.getAttribute("data-hot-plate-tab");panel.querySelectorAll("[data-hot-plate-tab]").forEach(function(tab){{tab.setAttribute("aria-selected",String(tab===button))}});panel.querySelectorAll("[data-hot-plate-view]").forEach(function(view){{view.hidden=view.getAttribute("data-hot-plate-view")!==key}})}})}});</script>
 {DASHBOARD_VIEW_SCRIPT}
 {WATCHLIST_SCRIPT}
 {DASHBOARD_REFRESH_SCRIPT}
-<script>(function(){{var tip=document.getElementById("chart-data-popover");if(!tip)return;var series=tip.querySelector("[data-chart-popup-series]"),date=tip.querySelector("[data-chart-popup-date]"),value=tip.querySelector("[data-chart-popup-value]"),extra=tip.querySelector("[data-chart-popup-extra]");function hideTip(){{tip.hidden=true}}function showTip(target){{series.textContent=target.getAttribute("data-chart-series")||"";date.textContent=target.getAttribute("data-chart-date")||"";value.textContent=target.getAttribute("data-chart-value")||"";var extraText=target.getAttribute("data-chart-extra")||"";extra.textContent=extraText;extra.hidden=!extraText;tip.hidden=false;var targetRect=target.getBoundingClientRect(),tipRect=tip.getBoundingClientRect();var left=Math.min(window.innerWidth-tipRect.width-8,Math.max(8,targetRect.left+targetRect.width/2-tipRect.width/2));var top=targetRect.top-tipRect.height-10;if(top<8)top=Math.min(window.innerHeight-tipRect.height-8,targetRect.bottom+10);tip.style.left=left+"px";tip.style.top=Math.max(8,top)+"px"}}document.addEventListener("click",function(event){{var target=event.target.closest?event.target.closest("[data-chart-date]"):null;if(target){{showTip(target);return}}if(event.target.closest&&event.target.closest("#chart-data-popover")){{if(event.target.closest("[data-chart-popup-close]"))hideTip();return}}hideTip()}});document.addEventListener("keydown",function(event){{if(event.key==="Escape"){{hideTip();return}}var target=event.target.closest?event.target.closest("[data-chart-date]"):null;if(target&&(event.key==="Enter"||event.key===" ")){{event.preventDefault();showTip(target)}}}})}})();</script></main></html>'''
+{CAPITAL_CHART_SCRIPT}
+{popover_script}</main></html>'''
     output_path = Path(output)
     output_tmp = output_path.with_name(f".{output_path.name}.tmp")
     output_tmp.write_text(doc, encoding="utf-8")
     output_tmp.replace(output_path)
+
+    # 同步生成独立子页面：近120日市场综合情绪
+    sub_doc = f'''<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>近120日市场综合情绪</title>
+<link rel="stylesheet" href="/assets/market-site.css">
+<style>
+body{{margin:0;background:#f6f8fb;color:#182b49;font:14px -apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif}}
+main{{max-width:1140px;margin:auto;padding:24px 20px 56px}}
+h1{{margin:0;font-size:26px}}h2{{font-size:16px;margin:0 0 12px}}
+.sub,small,.note{{color:#68778d}}.note{{font-size:12px;line-height:1.6}}
+.sub-top-bar{{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}}
+.sub-back-link{{color:#2869b2;text-decoration:none;font-weight:600;font-size:13px;white-space:nowrap}}
+.sub-back-link:hover{{text-decoration:underline}}
+.cards,.grid{{display:grid;gap:14px}}.cards-row-2{{grid-template-columns:repeat(2,minmax(0,1fr));margin:14px 0}}
+.grid{{grid-template-columns:2fr 1fr}}.trend-grid{{grid-template-columns:1fr;margin:14px 0}}.trend-grid>section:first-child{{grid-column:auto}}
+.card,section{{box-sizing:border-box;background:#fff;border:1px solid #e6edf5;border-radius:12px;padding:18px}}
+.value{{font-size:30px;font-weight:700;margin:7px 0}}svg{{width:100%;display:block}}
+.axis{{stroke:#dfe7f0}}.score{{fill:none;stroke:#5a4fcf;stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round}}.score-halo{{fill:none;stroke:#fff;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:.78}}
+.mean{{fill:none;stroke:#ec8b00;stroke-width:2}}.sentiment-band-cold-deep{{fill:#087f5b;opacity:.16}}.sentiment-band-cold{{fill:#3b9b63;opacity:.12}}.sentiment-band-neutral{{fill:#f4c95d;opacity:.20}}.sentiment-band-hot{{fill:#df655f;opacity:.12}}.sentiment-band-hot-deep{{fill:#b42318;opacity:.16}}.sentiment-band-label{{font-size:12px;font-weight:700;text-anchor:end;opacity:.78}}
+.tone{{font-weight:700}}.tone-cold-deep{{color:#087f5b}}.tone-cold{{color:#3b9b63}}.tone-neutral{{color:#b47b00}}.tone-hot{{color:#df655f}}.tone-hot-deep{{color:#b42318}}.tone-missing{{color:#8a96a8}}
+.rise{{color:#e5484d}}.fall{{color:#19a665}}
+.component{{margin:17px 0}}.component strong{{float:right}}.definition{{display:block;margin-top:7px;line-height:1.55}}.bar{{clear:both;height:9px;background:#edf1f6;border-radius:8px;margin:8px 0}}.bar i{{display:block;height:100%;background:#2869b2;border-radius:8px}}
+.extrema-dot{{stroke:#fff;stroke-width:2;pointer-events:none}}.extrema-text{{font-size:11px;font-weight:750;paint-order:stroke;stroke:#fff;stroke-width:3px;stroke-linejoin:round;pointer-events:none}}.extrema-score{{fill:#5a4fcf}}.extrema-mean{{fill:#d97706}}
+.chart-hit{{fill:transparent;stroke:transparent;stroke-width:2;cursor:pointer;outline:none}}.chart-hit-score:hover,.chart-hit-score:focus{{fill:#5a4fcf;stroke:#fff}}.chart-hit-mean:hover,.chart-hit-mean:focus{{fill:#d97706;stroke:#fff}}
+.chart-data-popover{{position:fixed;z-index:200;width:max-content;max-width:min(300px,calc(100vw - 24px));padding:12px 34px 12px 14px;border:1px solid #d9e2ed;border-radius:10px;background:rgba(255,255,255,.98);box-shadow:0 8px 28px rgba(24,43,73,.22);color:#182b49;pointer-events:auto}}.chart-data-popover[hidden]{{display:none}}.chart-data-popover b,.chart-data-popover strong,.chart-data-popover span{{display:block}}.chart-data-popover b{{font-size:13px}}.chart-data-popover small{{display:block;margin-top:3px}}.chart-data-popover strong{{margin-top:7px;font-size:20px;font-variant-numeric:tabular-nums}}.chart-data-popover span{{margin-top:5px;color:#68778d;font-size:12px}}.chart-data-popover button{{position:absolute;top:5px;right:7px;border:0;background:transparent;color:#7c899a;font-size:20px;line-height:1;cursor:pointer}}
+.card-rich{{display:flex;flex-direction:column;gap:8px}}.card-head{{display:flex;align-items:center;justify-content:space-between;gap:8px}}.card-more{{display:none}}.card-hero{{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}}.card-hero .value{{margin:2px 0}}.card-hero-meta{{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:13px}}.card-diff{{font-style:normal;font-size:12px;font-weight:700;padding:1px 7px;border-radius:999px;background:#f1f5f9}}.card-sub-grid{{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:4px}}.card-sub-item{{background:#f8fafd;border:1px solid #edf2f7;border-radius:8px;padding:7px 8px;display:flex;flex-direction:column;gap:2px}}.card-sub-item span{{font-size:11px;color:#68778d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}.card-sub-item small{{font-size:10px;margin-left:2px;color:#94a3b8}}.card-sub-item strong{{font-size:16px;font-variant-numeric:tabular-nums}}.phase-bars{{display:flex;flex-direction:column;gap:8px}}.phase-bar-head{{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:#475569}}.phase-bar-row .bar{{margin:5px 0 0;height:8px}}.card-footnote{{margin:4px 0 0;font-size:12px;line-height:1.55;color:#68778d}}
+@media(max-width:720px){{.cards-row-2,.grid{{grid-template-columns:1fr}}.grid>section:first-child{{grid-column:auto}}.card-sub-grid{{grid-template-columns:repeat(3,minmax(0,1fr))}}}}
+</style>
+<body><main>
+<!-- SITE_NAVIGATION -->
+<div class="sub-top-bar">
+  <div><h1>近120日市场综合情绪</h1><p class="sub" style="margin:4px 0 0">{subtitle}</p></div>
+  <a class="sub-back-link" href="/">← 返回市场仪表盘</a>
+</div>
+{sentiment_cards_row2}
+{sentiment_120d_sections}
+<div id="chart-data-popover" class="chart-data-popover" role="status" aria-live="polite" hidden><button type="button" data-chart-popup-close aria-label="关闭">×</button><b data-chart-popup-series></b><small data-chart-popup-date></small><strong data-chart-popup-value></strong><span data-chart-popup-extra hidden></span></div>
+{popover_script}
+</main></body></html>'''
+    sub_path = output_path.with_name("market_sentiment_120d.html")
+    sub_tmp = sub_path.with_name(f".{sub_path.name}.tmp")
+    sub_tmp.write_text(sub_doc, encoding="utf-8")
+    sub_tmp.replace(sub_path)
 
 
 if __name__ == "__main__":

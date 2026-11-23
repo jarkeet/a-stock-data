@@ -30,7 +30,14 @@ SITE_ASSETS = {
 
 
 def site_navigation(active):
-    links = (("dashboard", "/", "市场仪表盘"), ("indices", "/indices/", "指数估值"))
+    links = (
+        ("dashboard", "/", "市场仪表盘"),
+        ("sentiment-120d", "/sentiment-120d/", "近120日情绪"),
+        ("fear-greed", "/fear-greed/", "恐惧贪婪"),
+        ("equity-bond", "/equity-bond-spread/", "股债利差"),
+        ("buffett", "/buffett-index/", "巴菲特指数"),
+        ("indices", "/indices/", "指数估值"),
+    )
     menu = "".join(
         f'<a href="{url}"' + (' aria-current="page"' if key == active else "") + f'>{label}</a>'
         for key, url, label in links
@@ -1050,6 +1057,62 @@ class WatchlistHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": str(error)}, 500)
                 return
             self._send_json({"initialized": initialized, "items": items})
+            return
+        if path in ("/sentiment-120d", "/sentiment-120d/", "/market_sentiment_120d.html"):
+            s120_path = self.server.dashboard_path.with_name("market_sentiment_120d.html")
+            try:
+                page = s120_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                self.send_error(404, "120d sentiment page has not been generated yet")
+                return
+            except OSError as error:
+                self.send_error(500, str(error))
+                return
+            self._send_body(
+                page.replace("<!-- SITE_NAVIGATION -->", site_navigation("sentiment-120d")).encode("utf-8")
+            )
+            return
+        if path in ("/fear-greed", "/fear-greed/", "/market_fear_greed.html"):
+            fg_path = self.server.dashboard_path.with_name("market_fear_greed.html")
+            try:
+                page = fg_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                self.send_error(404, "Fear & Greed page has not been generated yet")
+                return
+            except OSError as error:
+                self.send_error(500, str(error))
+                return
+            self._send_body(
+                page.replace("<!-- SITE_NAVIGATION -->", site_navigation("fear-greed")).encode("utf-8")
+            )
+            return
+        if path in ("/equity-bond-spread", "/equity-bond-spread/", "/market_hs300_equity_bond.html"):
+            eb_path = self.server.dashboard_path.with_name("market_hs300_equity_bond.html")
+            try:
+                page = eb_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                self.send_error(404, "Equity-bond spread page has not been generated yet")
+                return
+            except OSError as error:
+                self.send_error(500, str(error))
+                return
+            self._send_body(
+                page.replace("<!-- SITE_NAVIGATION -->", site_navigation("equity-bond")).encode("utf-8")
+            )
+            return
+        if path in ("/buffett-index", "/buffett-index/", "/market_buffett_index.html"):
+            bf_path = self.server.dashboard_path.with_name("market_buffett_index.html")
+            try:
+                page = bf_path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                self.send_error(404, "Buffett index page has not been generated yet")
+                return
+            except OSError as error:
+                self.send_error(500, str(error))
+                return
+            self._send_body(
+                page.replace("<!-- SITE_NAVIGATION -->", site_navigation("buffett")).encode("utf-8")
+            )
             return
         if path == "/a-share-pe-valuation-report.html":
             report_path = self.server.dashboard_path.with_name(
