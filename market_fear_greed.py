@@ -46,6 +46,7 @@ PERCENTILE_10Y_WINDOW = 2520
 
 DEFAULT_INDEX_CACHE = Path("market_fear_greed_index_cache.csv")
 DEFAULT_MARGIN_CACHE = Path("market_fear_greed_margin_cache.csv")
+DEFAULT_CSI_ALL_CACHE = Path("market_valuation_csi_all.csv")
 DEFAULT_SENTIMENT_DAILY = Path("market_sentiment_daily.csv")
 DEFAULT_HISTORY_CSV = Path("market_fear_greed_history.csv")
 DEFAULT_OUTPUT_HTML = Path("market_fear_greed.html")
@@ -214,11 +215,54 @@ def load_or_update_margin_history(
     return merged
 
 
+def load_or_update_csi_all_closes(
+    cache_path: Path = DEFAULT_CSI_ALL_CACHE,
+    force: bool = False,
+) -> pd.DataFrame:
+    """加载中证全指（000985）日频收盘价，必要时通过中证官网增量刷新。"""
+    existing = pd.DataFrame()
+    if cache_path.exists():
+        try:
+            existing = pd.read_csv(cache_path, parse_dates=["date"])
+            existing["date"] = existing["date"].dt.normalize()
+            existing["close"] = pd.to_numeric(existing["close"], errors="coerce")
+            existing = existing.dropna(subset=["date", "close"]).sort_values("date").drop_duplicates("date", keep="last")
+        except Exception:
+            existing = pd.DataFrame()
+
+    need_refresh = force or existing.empty or existing["date"].max() < pd.Timestamp.now().normalize() - pd.Timedelta(days=3)
+    if need_refresh:
+        try:
+            from market_valuation import fetch_csi_index
+
+            fresh = fetch_csi_index("000985", start="20130101")
+            fresh["date"] = pd.to_datetime(fresh["date"]).dt.normalize()
+            fresh["close"] = pd.to_numeric(fresh["close"], errors="coerce")
+            fresh = fresh.dropna(subset=["date", "close"])
+            if not existing.empty:
+                merged = (
+                    pd.concat([existing, fresh], ignore_index=True)
+                    .sort_values("date")
+                    .drop_duplicates("date", keep="last")
+                )
+            else:
+                merged = fresh.sort_values("date").drop_duplicates("date", keep="last")
+            merged.to_csv(cache_path, index=False, encoding="utf-8-sig", date_format="%Y-%m-%d")
+            existing = merged
+        except Exception:
+            pass
+
+    if existing.empty:
+        return pd.DataFrame(columns=["date", "csi_all_close"])
+    return existing[["date", "close"]].rename(columns={"close": "csi_all_close"}).reset_index(drop=True)
+
+
 def calculate_fear_greed_history(
     index_df: pd.DataFrame,
     margin_df: pd.DataFrame,
     sentiment_daily_path: Path = DEFAULT_SENTIMENT_DAILY,
     display_start: str = DISPLAY_START_DATE,
+    csi_all_df: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """按双支柱模型计算恐惧贪婪指数全历史序列及最新分项快照。"""
     # 1. 构建五宽基对齐表，计算价格压力（两次取中位数）及基础行情特征
@@ -230,6 +274,10 @@ def calculate_fear_greed_history(
         .reset_index(drop=True)
     )
     frame = base_dates.copy()
+    if csi_all_df is not None and not csi_all_df.empty:
+        frame = frame.merge(csi_all_df[["date", "csi_all_close"]], on="date", how="left")
+    else:
+        frame["csi_all_close"] = np.nan
 
     pressure_cols = []
     vol_cols = []
@@ -404,6 +452,7 @@ def save_history_csv(frame: pd.DataFrame, output_csv: Path = DEFAULT_HISTORY_CSV
         "short_sentiment_score",
         "broad_pressure_score",
         "history_pct_10y",
+        "csi_all_close",
         "sz_close",
         "vol_score",
         "turnover_score",
@@ -756,12 +805,12 @@ FEAR_GREED_SCRIPT = r"""<script>
     leftPad:92,
     rightPad:106,
     defaultDays:240,
-    rightSeries:{values:payload.sz_close},
+    rightSeries:{values:payload.csi_all_close},
     series:[
       {key:"fg",name:"恐惧贪婪指数",color:"#10b981",values:payload.fg,withMood:true,dynamicMoodColor:true,defaultVisible:true},
       {key:"short",name:"短期市场情绪",color:"#ec8b00",values:payload.short,withMood:true,defaultVisible:false},
       {key:"pressure",name:"五宽基价格压力",color:"#7c3aed",values:payload.pressure,defaultVisible:false},
-      {key:"sz",name:"深证成指（收盘点位）",color:"#3b82f6",values:payload.sz_close,axis:"right",defaultVisible:true}
+      {key:"csi_all",name:"中证全指（收盘点位）",color:"#3b82f6",values:payload.csi_all_close,axis:"right",defaultVisible:true}
     ]
   });
 
@@ -803,14 +852,14 @@ FEAR_GREED_SCRIPT = r"""<script>
   var csvBtn=document.getElementById("fg-download-csv");
   if(csvBtn){
     csvBtn.addEventListener("click",function(){
-      var lines=["date,fear_greed_index,short_sentiment_score,broad_pressure_score,sz_close"];
+      var lines=["date,fear_greed_index,short_sentiment_score,broad_pressure_score,csi_all_close"];
       for(var i=0;i<total;i++){
         lines.push([
           dates[i],
           payload.fg[i]===null?"":payload.fg[i],
           payload.short[i]===null?"":payload.short[i],
           payload.pressure[i]===null?"":payload.pressure[i],
-          payload.sz_close[i]===null?"":payload.sz_close[i]
+          payload.csi_all_close[i]===null?"":payload.csi_all_close[i]
         ].join(","));
       }
       var blob=new Blob(["\ufeff"+lines.join("\n")],{type:"text/csv;charset=utf-8;"});
@@ -877,6 +926,7 @@ def render_fear_greed_page(
     recent_rows = []
     for _, row in frame.tail(20).iloc[::-1].iterrows():
         lbl, cls, _ = mood_meta(row["fear_greed_index"])
+        csi_text = f"{row['csi_all_close']:,.2f}" if pd.notna(row.get("csi_all_close")) else "--"
         recent_rows.append(
             f'<tr>'
             f'<td>{row["date"]:%Y-%m-%d}</td>'
@@ -885,7 +935,7 @@ def render_fear_greed_page(
             f'<td class="num">{row["short_sentiment_score"]:.2f}</td>'
             f'<td class="num">{row["broad_pressure_score"]:.2f}</td>'
             f'<td class="num">{row["history_pct_10y"]:.1f}%</td>'
-            f'<td class="num">{row["sz_close"]:,.2f}</td>'
+            f'<td class="num">{csi_text}</td>'
             f'</tr>'
         )
 
@@ -895,6 +945,7 @@ def render_fear_greed_page(
             "fg": _series_to_json_list(frame["fear_greed_index"]),
             "short": _series_to_json_list(frame["short_sentiment_score"]),
             "pressure": _series_to_json_list(frame["broad_pressure_score"]),
+            "csi_all_close": _series_to_json_list(frame["csi_all_close"]),
             "sz_close": _series_to_json_list(frame["sz_close"]),
             "p_399001": _series_to_json_list(frame["pressure_399001"]),
             "p_000300": _series_to_json_list(frame["pressure_000300"]),
@@ -1025,7 +1076,7 @@ th{{color:#68778d;font-weight:500}}td.num,th.num{{text-align:right;font-variant-
 
 <section>
   <div class="fg-section-head">
-    <h2>历史走势图（恐惧贪婪指数 vs 深证成指）</h2>
+    <h2>历史走势图（恐惧贪婪指数 vs 中证全指）</h2>
     <div class="fg-toolbar">
       <div class="fg-btn-group" role="group" aria-label="时间区间">
         <button type="button" data-range-days="240" aria-pressed="true">近1年</button>
@@ -1043,7 +1094,7 @@ th{{color:#68778d;font-weight:500}}td.num,th.num{{text-align:right;font-variant-
     <button type="button" class="fg-chip" data-series-toggle="fg" aria-pressed="true"><i style="background:linear-gradient(135deg,#c81e1e 0%,#f97316 35%,#eab308 55%,#84cc16 75%,#10b981 100%)"></i>恐惧贪婪指数（五色分段）</button>
     <button type="button" class="fg-chip" data-series-toggle="short" aria-pressed="false"><i style="background:#ec8b00"></i>短期市场情绪</button>
     <button type="button" class="fg-chip" data-series-toggle="pressure" aria-pressed="false"><i style="background:#7c3aed"></i>五宽基价格压力</button>
-    <button type="button" class="fg-chip" data-series-toggle="sz" aria-pressed="true"><i style="background:#3b82f6"></i>深证成指（左外轴）</button>
+    <button type="button" class="fg-chip" data-series-toggle="csi_all" aria-pressed="true"><i style="background:#3b82f6"></i>中证全指（左外轴）</button>
   </div>
   <svg id="fg-main-svg" class="fg-svg" viewBox="0 0 1080 420">
     <defs>
@@ -1093,7 +1144,7 @@ th{{color:#68778d;font-weight:500}}td.num,th.num{{text-align:right;font-variant-
     <path class="fg-line" data-line="pressure" stroke="#7c3aed"/>
     <path class="fg-line" data-line="short" stroke="#ec8b00"/>
     <path class="fg-line fg-line-main" data-line="fg" stroke="url(#fg-line-grad)"/>
-    <path class="fg-line-sz" data-line="sz" stroke="#3b82f6"/>
+    <path class="fg-line-sz" data-line="csi_all" stroke="#3b82f6"/>
     <line class="fg-crosshair" data-crosshair x1="0" y1="24" x2="0" y2="378" hidden/>
     <g data-dates></g>
   </svg>
@@ -1104,7 +1155,7 @@ th{{color:#68778d;font-weight:500}}td.num,th.num{{text-align:right;font-variant-
     <span><i style="background:#f97316"></i>56–75 贪婪</span>
     <span><i style="background:#c81e1e"></i>76–100 极度贪婪</span>
   </div>
-  <p class="fg-note">双左轴：最左侧蓝轴为深证成指点位，内侧灰轴为恐惧贪婪指数（0–100分）。按住 <b>Ctrl + 滚轮</b> 缩放，按住 <b>鼠标左键</b> 拖动平移，<b>鼠标移动</b> 实时查看当日数值，双击或点「重置视图」恢复全量。</p>
+  <p class="fg-note">双左轴：最左侧蓝轴为中证全指（000985）点位，内侧灰轴为恐惧贪婪指数（0–100分）。按住 <b>Ctrl + 滚轮</b> 缩放，按住 <b>鼠标左键</b> 拖动平移，<b>鼠标移动</b> 实时查看当日数值，双击或点「重置视图」恢复全量。</p>
 </section>
 
 <section>
@@ -1174,7 +1225,7 @@ th{{color:#68778d;font-weight:500}}td.num,th.num{{text-align:right;font-variant-
 <section>
   <div class="fg-section-head"><h2>最近 20 个交易日观察明细</h2><small>按日期倒序排列</small></div>
   <table>
-    <thead><tr><th>日期</th><th class="num">恐惧贪婪指数</th><th>情绪状态</th><th class="num">短期市场情绪</th><th class="num">五宽基压力</th><th class="num">近10年分位</th><th class="num">深证成指</th></tr></thead>
+    <thead><tr><th>日期</th><th class="num">恐惧贪婪指数</th><th>情绪状态</th><th class="num">短期市场情绪</th><th class="num">五宽基压力</th><th class="num">近10年分位</th><th class="num">中证全指</th></tr></thead>
     <tbody>{''.join(recent_rows)}</tbody>
   </table>
 </section>
@@ -1219,6 +1270,7 @@ th{{color:#68778d;font-weight:500}}td.num,th.num{{text-align:right;font-variant-
 def build_fear_greed(
     index_cache: Path = DEFAULT_INDEX_CACHE,
     margin_cache: Path = DEFAULT_MARGIN_CACHE,
+    csi_all_cache: Path = DEFAULT_CSI_ALL_CACHE,
     sentiment_daily: Path = DEFAULT_SENTIMENT_DAILY,
     output_csv: Path = DEFAULT_HISTORY_CSV,
     output_html: Path = DEFAULT_OUTPUT_HTML,
@@ -1227,7 +1279,10 @@ def build_fear_greed(
     """执行完整采集、计算、CSV 导出与 HTML 渲染，返回最新快照元数据。"""
     index_df = load_or_update_broad_indices(index_cache, force=force)
     margin_df = load_or_update_margin_history(margin_cache, force=force)
-    frame, meta = calculate_fear_greed_history(index_df, margin_df, sentiment_daily)
+    csi_all_df = load_or_update_csi_all_closes(csi_all_cache, force=force)
+    frame, meta = calculate_fear_greed_history(
+        index_df, margin_df, sentiment_daily, csi_all_df=csi_all_df
+    )
     save_history_csv(frame, output_csv)
     render_fear_greed_page(frame, meta, output_html)
     return meta
