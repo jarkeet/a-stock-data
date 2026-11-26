@@ -18,6 +18,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from market_index_market import index_market_data
 from market_index_valuation import INDICES, index_valuation_data
 
 
@@ -1035,6 +1036,9 @@ class WatchlistHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "指数估值快照暂时不可用"}, 503)
                 return
             self._send_json(payload)
+            return
+        if path == "/api/index-market":
+            self._send_json(index_market_data())
             return
         if path == "/api/watchlist/search":
             params = parse_qs(parsed.query)
