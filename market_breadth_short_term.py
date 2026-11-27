@@ -24,8 +24,8 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Sa
 QUOTE_URL = "https://qt.gtimg.cn/q="
 BSE_LIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 KLINE_URLS = [
-    "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
-    "https://ifzq.gtimg.cn/appstock/app/fqkline/get",
+    "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get",
+    "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get",
 ]
 INDEX_SPECS = [
     ("sh000001", "上证指数"),
@@ -253,6 +253,46 @@ def _fetch_kline(record: dict, bars: int, end: pd.Timestamp) -> pd.DataFrame | N
     return None
 
 
+def _fetch_kline_incremental(
+    record: dict,
+    cached_stock: pd.DataFrame | None,
+    bars: int,
+    inc_bars: int,
+    end: pd.Timestamp,
+) -> pd.DataFrame | None:
+    """单只股票优先增量拉取最近日K；检测到除权或无缓存时自动回退全量拉取。"""
+    if cached_stock is None or cached_stock.empty:
+        return _fetch_kline(record, bars, end)
+    recent = _fetch_kline(record, inc_bars, end)
+    if recent is None or recent.empty:
+        fallback = cached_stock.loc[cached_stock.date <= end].copy()
+        return fallback if not fallback.empty else None
+    overlap = cached_stock[["date", "close"]].merge(
+        recent[["date", "close"]], on="date", suffixes=("_old", "_new")
+    )
+    if not overlap.empty:
+        latest_row = overlap.sort_values("date").iloc[-1]
+        old_close = float(latest_row["close_old"])
+        new_close = float(latest_row["close_new"])
+        if old_close > 0 and abs(new_close - old_close) / old_close < 1e-3:
+            merged = pd.concat(
+                [cached_stock.loc[cached_stock.date < recent.date.min()], recent],
+                ignore_index=True,
+            )
+            merged = (
+                merged.loc[merged.date <= end]
+                .sort_values("date")
+                .drop_duplicates("date", keep="last")
+                .tail(bars)
+            )
+            merged["secid"], merged["code"], merged["name"] = (
+                record["secid"], record["code"], record["name"]
+            )
+            return merged
+    # 重叠日缺失或前复权价已变动（除权除息），回退拉取完整区间
+    return _fetch_kline(record, bars, end)
+
+
 def tencent_market_kline(
     universe: pd.DataFrame,
     end: str | pd.Timestamp,
@@ -261,19 +301,47 @@ def tencent_market_kline(
     workers: int = 8,
     force: bool = False,
 ) -> pd.DataFrame:
-    """批量回溯股票日 K；缓存已覆盖目标日期时直接复用。"""
+    """批量回溯股票日 K；缓存已覆盖目标日期时直接复用，落后不久时走增量刷新。"""
     end = pd.Timestamp(end).normalize()
     path = Path(cache_path)
+    cached_by_secid: dict[str, pd.DataFrame] = {}
+    inc_bars: int | None = None
     if path.exists() and not force:
         cached = pd.read_csv(path, parse_dates=["date"], dtype={"code": str})
-        if not cached.empty and cached.date.max() >= end:
-            return cached.loc[cached.date <= end].copy()
+        if not cached.empty:
+            cached["code"] = cached["code"].str.zfill(6)
+            cached_max = cached.date.max()
+            if cached_max >= end:
+                return cached.loc[cached.date <= end].copy()
+            gap_days = int((end - cached_max).days)
+            if 0 < gap_days <= 30:
+                inc_bars = min(bars, max(15, gap_days + 10))
+                cached_by_secid = {
+                    secid: group.copy()
+                    for secid, group in cached.groupby("secid", sort=False)
+                }
 
     frames: list[pd.DataFrame] = []
     records = universe.to_dict("records")
-    with ThreadPoolExecutor(max_workers=max(1, min(int(workers), 32))) as pool:
-        futures = {pool.submit(_fetch_kline, record, bars, end): record["secid"]
-                   for record in records}
+    max_workers = max(1, min(int(workers), 12))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        if inc_bars is not None:
+            futures = {
+                pool.submit(
+                    _fetch_kline_incremental,
+                    record,
+                    cached_by_secid.get(record["secid"]),
+                    bars,
+                    inc_bars,
+                    end,
+                ): record["secid"]
+                for record in records
+            }
+        else:
+            futures = {
+                pool.submit(_fetch_kline, record, bars, end): record["secid"]
+                for record in records
+            }
         for completed, future in enumerate(as_completed(futures), 1):
             frame = future.result()
             if frame is not None:
@@ -283,6 +351,8 @@ def tencent_market_kline(
     if len(frames) < 4000:
         raise RuntimeError(f"仅成功取得 {len(frames)} 只股票日K，低于合理下限，停止写入")
     data = pd.concat(frames, ignore_index=True)
+    if data.loc[data.date == end, "secid"].nunique() < 3000:
+        raise RuntimeError(f"目标日期 {end:%Y-%m-%d} 有效股票日K不足，停止写入")
     data.to_csv(path, index=False, encoding="utf-8-sig", compression="gzip")
     return data
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import os
 import re
 import threading
@@ -20,12 +21,18 @@ from urllib3.util.retry import Retry
 
 from market_index_market import index_market_data
 from market_index_valuation import INDICES, index_valuation_data
+from market_etf_monitor import DB_PATH as ETF_DB_PATH
+from market_etf_monitor import dashboard_data as etf_dashboard_data
+from market_etf_monitor import evidence_data, replay_data, start_collector
 
 
 SITE_ROOT = Path(__file__).resolve().parent
 SITE_ASSETS = {
     "/assets/market-site.css": "text/css; charset=utf-8",
     "/assets/index-valuation.js": "text/javascript; charset=utf-8",
+    "/assets/etf-monitor.js": "text/javascript; charset=utf-8",
+    "/assets/etf-evidence.js": "text/javascript; charset=utf-8",
+    "/assets/etf-monitor.css": "text/css; charset=utf-8",
     "/assets/market-show-logo.png": "image/png",
 }
 
@@ -38,6 +45,7 @@ def site_navigation(active):
         ("equity-bond", "/equity-bond-spread/", "股债利差"),
         ("buffett", "/buffett-index/", "巴菲特指数"),
         ("indices", "/indices/", "指数估值"),
+        ("etf-monitor", "/etf-monitor/", "汪汪队ETF买盘"),
     )
     menu = "".join(
         f'<a href="{url}"' + (' aria-current="page"' if key == active else "") + f'>{label}</a>'
@@ -988,6 +996,7 @@ class WatchlistHTTPServer(ThreadingHTTPServer):
         self.dashboard_path = dashboard_path
         self.watchlist_storage_path = watchlist_storage_path
         self.instance_token = instance_token
+        self.etf_monitor_path = ETF_DB_PATH
 
 
 class WatchlistHandler(BaseHTTPRequestHandler):
@@ -1021,6 +1030,28 @@ class WatchlistHandler(BaseHTTPRequestHandler):
             return
         if path in SITE_ASSETS:
             self._send_body((SITE_ROOT / path.lstrip("/")).read_bytes(), SITE_ASSETS[path])
+            return
+        if path in ("/etf-monitor", "/etf-monitor/"):
+            page = (SITE_ROOT / "market_etf_monitor.html").read_text(encoding="utf-8")
+            self._send_body(page.replace("<!-- SITE_NAVIGATION -->", site_navigation("etf-monitor")).encode("utf-8"))
+            return
+        if path in ("/api/etf-monitor", "/api/etf-monitor/replay", "/api/etf-monitor/evidence"):
+            query = parse_qs(parsed.query)
+            day = query.get("day", [""])[0]
+            try:
+                if path.endswith("/replay"):
+                    payload = replay_data(self.server.etf_monitor_path, day, query.get("code", [""])[0])
+                elif path.endswith("/evidence"):
+                    payload = evidence_data(self.server.etf_monitor_path)
+                else:
+                    payload = etf_dashboard_data(self.server.etf_monitor_path, day)
+            except ValueError:
+                self._send_json({"error": "日期或 ETF 代码无效"}, 400)
+            except (OSError, sqlite3.Error) as error:
+                self.log_message("ETF monitor: %s", error)
+                self._send_json({"error": "ETF 行情暂时无法读取"}, 503)
+            else:
+                self._send_json(payload)
             return
         detail = re.fullmatch(r"/index/([a-z0-9]+)/?", path)
         if path in ("/indices", "/indices/") or (detail and detail[1] in INDICES):
@@ -1193,6 +1224,7 @@ def main():
         help="自选股持久化 JSON 路径（默认与仪表盘放在同一目录）",
     )
     parser.add_argument("--instance-token", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--etf-monitor-db", type=Path, default=ETF_DB_PATH)
     args = parser.parse_args()
     dashboard_path = Path(args.dashboard).resolve()
     watchlist_storage_path = (
@@ -1211,11 +1243,22 @@ def main():
         f"dashboard server: http://{args.host}:{args.port}/ "
         f"({dashboard_path}); watchlist: {watchlist_storage_path}"
     )
+    server.etf_monitor_path = args.etf_monitor_db.resolve()
+    collector = None
+    try:
+        collector = start_collector(server.etf_monitor_path)
+    except (OSError, sqlite3.Error) as error:
+        print(f"ETF monitor could not start: {error}", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass
     finally:
+        if collector:
+            stop, workers = collector
+            stop.set()
+            for worker in workers:
+                worker.join(timeout=7)
         server.server_close()
 
 

@@ -331,13 +331,17 @@ function renderDetail(index) {
   const notes = [];
   const historySources = {PE:index.peHistorySource, PB:index.pbHistorySource};
   const balanced = Object.keys(historySources).filter(key => historySources[key] === "balanced");
-  const savedSnapshots = Object.keys(historySources).filter(key => historySources[key] === "danjuan");
+  const danjuan = Object.keys(historySources).filter(key => historySources[key] === "danjuan");
+  const savedSnapshots = Object.keys(historySources).filter(key => historySources[key] === "danjuanSnapshot");
   if (historySources.PE === "csi" || index.referencePe?.source === "csi") {
     const metric = historySources.PE === "csi" ? "PE 估值" : "参考 PE 曲线";
     notes.push(`${metric}和收盘点位来自<a href="${index.csiSource}">中证指数</a>，按周取样。`);
   }
   if (balanced.length) {
-    notes.push(`${balanced.join("、")} 卡片与曲线使用<a href="https://xushilu.com/valuation">Balanced Portfolio</a>公开的平安估值数据。分位按可用周样本计算。`);
+    notes.push(`${balanced.join("、")} 曲线使用<a href="https://xushilu.com/valuation">Balanced Portfolio</a>公开的平安估值数据。分位按可用周样本计算。`);
+  }
+  if (danjuan.length) {
+    notes.push(`${danjuan.join("、")} 曲线使用雪球基金历史估值，分位按过去最多 10 年的可用周样本计算，至少需要 52 个历史周样本。`);
   }
   if (savedSnapshots.length) {
     notes.push(`雪球 ${savedSnapshots.join("、")} 曲线按本地已保存的日终快照累计。`);

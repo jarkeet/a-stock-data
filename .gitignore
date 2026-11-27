@@ -4,6 +4,9 @@ __pycache__/
 reports/
 
 # Local watchlist and generated market-data caches
+/market_etf_monitor.sqlite3
+/market_etf_monitor.sqlite3-wal
+/market_etf_monitor.sqlite3-shm
 /market_watchlist.json
 /hs_a_share_turnover.csv
 /market_index_daily_cache.csv

@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 Set-Location -LiteralPath $PSScriptRoot
 
 function Wait-BeforeExit {
@@ -9,32 +9,46 @@ function Wait-BeforeExit {
     [void](Read-Host)
 }
 
-$pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+# 优先使用项目内 .venv 虚拟环境中的 Python
+$venvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+$pythonExecutable = $null
 $pythonArguments = @()
-if (-not $pythonCommand) {
-    $pythonCommand = Get-Command py -ErrorAction SilentlyContinue
-    $pythonArguments = @("-3")
+if (Test-Path -LiteralPath $venvPython) {
+    $pythonExecutable = $venvPython
+}
+else {
+    $pythonCommand = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonCommand) {
+        $pythonCommand = Get-Command py -ErrorAction SilentlyContinue
+        $pythonArguments = @("-3")
+    }
+    if ($pythonCommand) {
+        $pythonExecutable = $pythonCommand.Source
+    }
 }
 
-if (-not $pythonCommand) {
+if (-not $pythonExecutable) {
     Wait-BeforeExit "Python 3 was not found. Install Python 3 and add it to PATH."
     exit 1
 }
 
 try {
-    & $pythonCommand.Source @pythonArguments -c "import pandas, requests" 2>$null
+    & $pythonExecutable @pythonArguments -c "import numpy, pandas, requests" 2>$null
     if ($LASTEXITCODE -ne 0) {
         throw "missing dependencies"
     }
 }
 catch {
-    Wait-BeforeExit "Missing dependencies. Run: python -m pip install pandas requests"
+    Wait-BeforeExit "Missing dependencies. Run: python -m pip install numpy pandas requests openpyxl xlrd"
     exit 1
 }
 
 $dashboardPath = Join-Path $PSScriptRoot "market_sentiment_dashboard.html"
 $intradayScript = Join-Path $PSScriptRoot "market_intraday_sentiment.py"
 $capitalScript = Join-Path $PSScriptRoot "market_capital_risk_appetite.py"
+$fearGreedScript = Join-Path $PSScriptRoot "market_fear_greed.py"
+$equityBondScript = Join-Path $PSScriptRoot "market_hs300_equity_bond.py"
+$buffettScript = Join-Path $PSScriptRoot "market_buffett_index.py"
 $dashboardScript = Join-Path $PSScriptRoot "market_sentiment_dashboard.py"
 $watchlistServerScript = Join-Path $PSScriptRoot "market_watchlist_server.py"
 $turnoverPath = Join-Path $PSScriptRoot "hs_a_share_turnover.csv"
@@ -42,7 +56,7 @@ $intradayOutput = Join-Path $PSScriptRoot "market_sentiment_intraday.csv"
 $dailyOutput = Join-Path $PSScriptRoot "market_sentiment_daily.csv"
 $marginOutput = Join-Path $PSScriptRoot "market_margin_balance.csv"
 $startupFailureSignal = Join-Path $PSScriptRoot ".dashboard_startup_failed"
-$dashboardPort = 8765
+$dashboardPort = if ($env:DASHBOARD_PORT) { [int]$env:DASHBOARD_PORT } else { 8765 }
 $dashboardBaseUrl = "http://127.0.0.1:$dashboardPort/"
 $dashboardUrl = $dashboardBaseUrl
 $dashboardOpenedSignal = Join-Path $PSScriptRoot ".dashboard_opened"
@@ -120,6 +134,17 @@ $staleProcessParameters = @{
 }
 Stop-StaleDashboardPythonProcesses @staleProcessParameters
 
+# 首次运行缺少成交额缓存时自动初始化近一年数据
+if (-not (Test-Path -LiteralPath $turnoverPath)) {
+    Write-Host "首次运行，正在初始化沪深A股日成交额缓存..." -ForegroundColor Cyan
+    & $pythonExecutable @pythonArguments -c "import pandas as pd; from market_turnover_sentiment import hs_a_share_turnover; hs_a_share_turnover((pd.Timestamp.today() - pd.Timedelta(days=365)).strftime('%Y-%m-%d'), cache_path=r'$turnoverPath')"
+    if ($LASTEXITCODE -ne 0) {
+        Set-Content -LiteralPath $startupFailureSignal -Value (Get-Date).ToString("o")
+        Wait-BeforeExit "初始化沪深A股日成交额缓存失败，请检查上方错误信息。"
+        exit $LASTEXITCODE
+    }
+}
+
 Write-Host "Refreshing the intraday snapshot before opening the dashboard..." -ForegroundColor Cyan
 # Refresh intraday data before rendering/opening HTML so the browser never starts
 # from the previous run's stale turnover estimate.
@@ -134,7 +159,7 @@ $initialRefreshArguments += "--dashboard-output"
 $initialRefreshArguments += $dashboardPath
 $initialRefreshArguments += "--workers"
 $initialRefreshArguments += "16"
-& $pythonCommand.Source @initialRefreshArguments
+& $pythonExecutable @initialRefreshArguments
 if ($LASTEXITCODE -ne 0) {
     Set-Content -LiteralPath $startupFailureSignal -Value (Get-Date).ToString("o")
     Wait-BeforeExit "Initial intraday refresh failed. The dashboard was not opened to avoid showing stale data. Review the error above."
@@ -151,15 +176,34 @@ $capitalArguments += "--output"
 $capitalArguments += $dailyOutput
 $capitalArguments += "--margin-output"
 $capitalArguments += $marginOutput
-& $pythonCommand.Source @capitalArguments
+& $pythonExecutable @capitalArguments
 if ($LASTEXITCODE -ne 0) {
     Wait-BeforeExit "Shanghai + Shenzhen margin-balance refresh failed. Review the error above."
     exit $LASTEXITCODE
 }
 
+# 刷新恐惧贪婪指数、股债利差与中国巴菲特指数，单项失败时沿用已有缓存
+$optionalModules = @(
+    @{ Name = "恐惧贪婪指数"; Script = $fearGreedScript },
+    @{ Name = "沪深300/中证500股债利差"; Script = $equityBondScript },
+    @{ Name = "中国巴菲特指数"; Script = $buffettScript }
+)
+foreach ($module in $optionalModules) {
+    Write-Host "正在刷新$($module.Name)..." -ForegroundColor Cyan
+    try {
+        & $pythonExecutable @pythonArguments $module.Script
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "警告：$($module.Name)刷新失败，将沿用已有缓存。" -ForegroundColor Yellow
+        }
+    }
+    catch {
+        Write-Host "警告：$($module.Name)刷新失败，将沿用已有缓存。" -ForegroundColor Yellow
+    }
+}
+
 # The intraday script rendered once before the margin history was refreshed.
 # Render again so the page opened below contains the new two-market series.
-& $pythonCommand.Source @pythonArguments $dashboardScript `
+& $pythonExecutable @pythonArguments $dashboardScript `
     --turnover $turnoverPath --extra $dailyOutput --intraday $intradayOutput `
     --margin $marginOutput --output $dashboardPath
 if ($LASTEXITCODE -ne 0) {
@@ -177,7 +221,7 @@ $serverArguments += "$dashboardPort"
 $serverInstanceToken = [Guid]::NewGuid().ToString("N")
 $serverArguments += "--instance-token"
 $serverArguments += $serverInstanceToken
-$serverProcess = Start-Process -FilePath $pythonCommand.Source `
+$serverProcess = Start-Process -FilePath $pythonExecutable `
     -ArgumentList $serverArguments -PassThru -WindowStyle Hidden
 
 try {
@@ -249,7 +293,7 @@ try {
     $watchArguments += $intradayOutput
     $watchArguments += "--dashboard-output"
     $watchArguments += $dashboardPath
-    & $pythonCommand.Source @watchArguments
+    & $pythonExecutable @watchArguments
 
     if ($LASTEXITCODE -ne 0) {
         Wait-BeforeExit "The live refresh process stopped unexpectedly. Review the error above."

@@ -19,8 +19,8 @@ from market_capital_risk_appetite import _market_margin_history
 
 
 TENCENT_KLINE_URLS = (
-    "https://ifzq.gtimg.cn/appstock/app/fqkline/get",
-    "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+    "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get",
+    "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get",
 )
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36"
 

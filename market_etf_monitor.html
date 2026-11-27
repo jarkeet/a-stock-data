@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>汪汪队ETF买盘 · 市场先生</title>
+  <link rel="stylesheet" href="/assets/market-site.css">
+  <link rel="stylesheet" href="/assets/etf-monitor.css">
+  <script src="/assets/etf-monitor.js" defer></script>
+  <script src="/assets/etf-evidence.js" defer></script>
+</head>
+<body class="etf-page">
+  <!-- SITE_NAVIGATION -->
+  <main class="etf-shell">
+    <header class="etf-header">
+      <div>
+        <h1>汪汪队ETF买盘</h1>
+        <p>“汪汪队”是市场对国家队资金的俗称。用宽基 ETF 的成交变化观察买卖动向。</p>
+      </div>
+      <label class="etf-select">交易日 <select id="etf-day" aria-label="交易日"><option value="">跟随最新</option></select></label>
+    </header>
+
+    <div class="etf-status" id="etf-status" role="status">正在读取行情…</div>
+    <section class="etf-verdict" id="etf-verdict" aria-labelledby="etf-verdict-heading" data-tone="neutral">
+      <div class="etf-verdict-top">
+        <span id="etf-verdict-period">今日结论</span>
+      </div>
+      <div class="etf-verdict-result">
+        <h2 id="etf-verdict-heading" aria-live="polite">正在分析盘面</h2>
+        <div class="etf-verdict-points" aria-live="polite"><strong id="etf-verdict-score">—</strong><span> / 100 分</span></div>
+      </div>
+      <div class="etf-verdict-meter" id="etf-verdict-meter" role="meter" aria-label="主池买卖力度"
+           aria-valuemin="0" aria-valuemax="100" hidden>
+        <div class="etf-verdict-scale"><i aria-hidden="true"></i></div>
+        <div class="etf-verdict-axis" aria-hidden="true"><span>0 卖出</span><span>50 看不清</span><span>买入 100</span></div>
+      </div>
+      <p id="etf-verdict-text"></p>
+      <dl id="etf-verdict-metrics" class="etf-verdict-metrics"></dl>
+      <p id="etf-verdict-meta" class="etf-verdict-meta"></p>
+      <section class="etf-verdict-guide" aria-labelledby="etf-verdict-guide">
+        <h3 id="etf-verdict-guide">今日结论如何评分</h3>
+        <ul>
+          <li><strong>0–20 分</strong>　明显卖出</li>
+          <li><strong>21–40 分</strong>　偏卖出</li>
+          <li><strong>41–59 分</strong>　看不清</li>
+          <li><strong>60–79 分</strong>　偏买入</li>
+          <li><strong>80–100 分</strong>　明显买入</li>
+        </ul>
+        <p>以 50 分为中点，按主池净买卖方向加减。主动净额占比达到 20% 计满 30 分，同向与反向指数的数量差最多影响 10 分，成交放大到 2 倍计满 10 分。对照池行情用于辅助解读。</p>
+        <p>净额占比至少 5%、至少 3 个指数同向且多于反向，才进入偏买入或偏卖出。明显档还要求净额占比至少 12%、至少 4 个指数同向且成交放大至少 1.50 倍。行情过期、覆盖不足或收盘数据尚未核对时，显示「看不清」并留空分数。</p>
+      </section>
+    </section>
+
+    <div class="etf-summary" id="etf-summary" aria-label="监测概况"></div>
+
+    <div class="etf-grid">
+      <section class="etf-panel" aria-labelledby="replay-heading">
+        <div class="etf-panel-heading">
+          <div>
+            <h2 id="replay-heading">分钟成交回放</h2>
+            <p id="etf-chart-note">选择 ETF 查看成交额和价格。</p>
+          </div>
+          <label class="etf-select"><span class="etf-sr">回放 ETF</span><select id="etf-replay" aria-label="回放 ETF"></select></label>
+        </div>
+        <div class="etf-chart">
+          <canvas id="etf-chart" role="img" aria-label="ETF 分钟成交额和价格走势"></canvas>
+          <p id="etf-chart-empty">等待分钟数据</p>
+        </div>
+        <p class="etf-chart-meta" id="etf-chart-meta"></p>
+      </section>
+      <section class="etf-panel" aria-labelledby="events-heading">
+        <div class="etf-panel-heading"><div><h2 id="events-heading">放量事件</h2><p>按指数聚合，可点击回看。</p></div></div>
+        <div class="etf-events" id="etf-events"><p class="etf-empty">正在读取…</p></div>
+      </section>
+    </div>
+
+    <section class="etf-panel etf-evidence" aria-labelledby="holdings-heading">
+      <div class="etf-panel-heading">
+        <div><h2 id="holdings-heading">汇金系持仓证据</h2><p>按报告期末日期展示。点击图中的点可打开原报告。</p></div>
+        <label class="etf-select">ETF <select id="etf-holdings-fund" aria-label="持仓证据 ETF" disabled></select></label>
+      </div>
+      <div class="etf-evidence-body">
+        <div class="etf-history-legend">
+          <span><i class="etf-key etf-key-named"></i>两家汇金机构具名持仓</span>
+          <span><i class="etf-key etf-key-institutions"></i>机构份额上限</span>
+          <span><i class="etf-key etf-key-fund"></i>基金总份额上限</span>
+        </div>
+        <div id="etf-holdings-chart"><p class="etf-empty">正在读取持仓证据…</p></div>
+        <div id="etf-holdings-reports" class="etf-report-list"></div>
+        <section class="etf-holdings-method" aria-labelledby="etf-holdings-method-title">
+          <h3 id="etf-holdings-method-title">数据怎么取得</h3>
+          <p id="etf-holdings-coverage" aria-live="polite"></p>
+          <p><strong>来源</strong>　按 ETF 代码查基金管理人发布的年报、中报和季报。点击图中的点或「原报告」可查看出处。</p>
+          <p><strong>更新</strong>　基金季报通常在季末后 15 个工作日内发布，中报在半年结束后 2 个月内，年报在年末后 3 个月内。本图在报告发布并经人工核对后录入，横轴显示报告期末日期。<a href="https://www.csrc.gov.cn/csrc/c101954/c7619929/content.shtml" target="_blank" rel="noopener">证监会披露规则 ↗</a></p>
+          <p><strong>口径</strong>　具名持仓合计中央汇金投资和中央汇金资管直接持有的份额。只有机构合计或基金总份额时，用该数字表示最多可能持有多少。报告明确机构份额已含联接基金时，扣去单列的联接基金份额。</p>
+          <p><strong>缺口</strong>　缺少可用数据或报告尚未核对录入时，该期留空。两个报告期之间的持仓变化需等新的披露核实。</p>
+        </section>
+      </div>
+    </section>
+
+    <section class="etf-panel etf-evidence" aria-labelledby="shares-heading">
+      <div class="etf-panel-heading">
+        <div><h2 id="shares-heading">主池 ETF 日度份额变化</h2><p>沪深交易所披露的主池 ETF 合计份额，涵盖所有投资者。</p></div>
+        <div class="etf-controls">
+          <label class="etf-select">显示
+            <select id="etf-history-metric" aria-label="份额图显示内容">
+              <option value="both">每日增减和合计份额</option><option value="net">仅每日增减</option><option value="total">仅合计份额</option>
+            </select>
+          </label>
+          <label class="etf-select">区间
+            <select id="etf-history-range" aria-label="趋势区间">
+              <option value="1">近一个月</option><option value="3">近三个月</option><option value="6">近半年</option>
+              <option value="12" selected>近一年</option><option value="24">近两年</option><option value="36">近三年</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="etf-evidence-body">
+        <div class="etf-history-legend">
+          <span id="etf-history-net-key"><i class="etf-key etf-key-net"></i>每日增减柱（左轴）</span>
+          <span id="etf-history-total-key"><i class="etf-key etf-key-total"></i>合计份额线（右轴）</span>
+          <span><i class="etf-key etf-key-institutions"></i>组级放量</span>
+          <span><i class="etf-key etf-key-fund"></i>单品放量</span>
+          <span><i class="etf-key etf-key-report"></i>所选 ETF 的报告期末</span>
+          <span id="etf-history-index-key" hidden><i class="etf-key etf-key-index"></i><span id="etf-history-index-label"></span></span>
+        </div>
+        <p class="etf-history-coverage" id="etf-history-coverage"></p>
+        <div class="etf-history-chart-wrap">
+          <div id="etf-history-chart"><p class="etf-empty">正在读取日度份额…</p></div>
+          <div class="etf-history-tooltip" id="etf-history-tooltip" aria-hidden="true" hidden>
+            <strong id="etf-history-tip-day"></strong>
+            <dl>
+              <dt>份额增减</dt><dd id="etf-history-tip-net"></dd>
+              <dt>合计份额</dt><dd id="etf-history-tip-total"></dd>
+              <dt id="etf-history-tip-index-label">参考指数</dt><dd id="etf-history-tip-index"></dd>
+            </dl>
+            <small id="etf-history-tip-events"></small>
+          </div>
+          <p id="etf-history-reading" class="etf-sr" role="status"></p>
+        </div>
+        <section class="etf-history-guide" aria-labelledby="etf-history-guide-heading">
+          <h3 id="etf-history-guide-heading">怎么看这张图</h3>
+          <ol>
+            <li><strong>先看上图柱子和左轴。</strong>柱子在零线上方，表示主池总份额比上一交易日增加。在零线下方，表示份额减少。柱子越长，增减越多，单位是亿份。缺少披露或单只 ETF 的份额变动达到 35% 时，当天的增减留空待核对。</li>
+            <li><strong>再看上图紫线和右轴。</strong>紫线是当日 19 只主池 ETF 的总份额，单位也是亿份。线往上表示总份额增加，往下表示总份额减少。这里统计的是全体投资者持有的份额。</li>
+            <li><strong>把上下图对到同一天。</strong>下图是沪深 300 的收盘点位，提供当天的价格背景。如果指数下跌而上图柱子在零线之上，说明主池份额在价格走弱的同时仍有增加。</li>
+            <li><strong>看到放量点，再查分钟回放。</strong>橙点表示同一指数下多只 ETF 同时放量，灰点表示单只 ETF 放量。点开标记可看当日事件，点选事件可回放分钟成交。虚线标出当前所选 ETF 的报告期末。买卖主体以具名披露为准。</li>
+          </ol>
+          <p id="etf-history-guidance">把鼠标移到图上，或在手机上轻点，即可查看同一天的份额增减、合计份额及指数点位。也可聚焦图表后用左右方向键选日期。</p>
+        </section>
+        <p class="etf-evidence-note">份额数据源为 <a href="https://www.sse.com.cn/market/funddata/volumn/etfvolumn/" target="_blank" rel="noopener">上交所 ETF 规模</a> 和 <a href="https://www.szse.cn/market/fund/volume/etf/index.html" target="_blank" rel="noopener">深交所 ETF 规模</a>，按披露日汇总。</p>
+        <p class="etf-evidence-note" id="etf-history-benchmark-note" hidden></p>
+        <div id="etf-history-inspect" class="etf-history-inspect" hidden>
+          <div id="etf-history-events" class="etf-history-events"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="etf-panel" aria-labelledby="funds-heading">
+      <div class="etf-panel-heading">
+        <div><h2 id="funds-heading">ETF 监测池</h2><p>查看各产品的行情与历史基线。</p></div>
+        <div class="etf-controls">
+          <label class="etf-select">查找 <input id="etf-search" type="search" placeholder="ETF 代码、指数或管理人"></label>
+          <label class="etf-select">范围
+            <select id="etf-filter" aria-label="监测范围">
+              <option value="">全部 30 只</option><option value="main">主预警</option><option value="history">历史持仓观察</option>
+              <option value="control">市场对照</option><option value="theme">央企主题</option>
+            </select>
+          </label>
+          <label class="etf-select">排序
+            <select id="etf-sort" aria-label="排序">
+              <option value="multiple">同期放量</option><option value="buy">主动净买</option>
+              <option value="sell">主动净卖</option><option value="turnover">今日成交额</option>
+            </select>
+          </label>
+        </div>
+      </div>
+      <div class="etf-table-wrap">
+        <table>
+          <thead><tr><th scope="col">ETF / 跟踪指数</th><th scope="col">价格 / 涨跌</th><th scope="col">当日成交额</th><th scope="col">同期倍数</th><th scope="col">主动净买卖估算</th><th scope="col">近 5 分钟</th><th scope="col">官方份额 / 变化</th><th scope="col">参考规模</th><th scope="col">近 30 日成交趋势</th><th scope="col">公开持仓</th></tr></thead>
+          <tbody id="etf-funds"></tbody>
+        </table>
+      </div>
+      <details class="etf-method">
+        <summary>预警口径和数据来源</summary>
+        <p>腾讯财经提供实时行情和分钟数据，东方财富提供整 5 分钟参考历史。基线使用过去最多 60 个交易日的同一时点，至少需要 30 个可用样本。滚动基线样本不足时，整 5 分钟参考基线只在对应时点触发。</p>
+        <p>今日结论使用 19 只主池 ETF。主动净买额按每只 ETF 的（外盘量减内盘量）占总成交量的比例乘以当日成交额，再加总。收盘后，用 15:00 的收盘价和累计成交额核对方向快照。放量倍数仍比较相同产品、相同完整连续竞价时段的历史成交额中位数。分钟回放单列 14:57 至 15:00 收盘段。各档门槛见<a href="#etf-verdict-guide">今日结论评级说明</a>。</p>
+        <p>份额来自沪深交易所，以上一交易日正式披露为准。缺少相邻披露或单日变动达到 35% 时，页内标记缺口或异动，汇总留空。份额变化受全体投资者申赎影响。参考规模按已披露份额乘以页面最新价估算。</p>
+        <p>单品达到历史 P95、同期中位数 2 倍和产品金额门槛时记为放量。同指数至少两只同时触发且同一批产品合计达到历史 P99 时升级为组级事件。公开持仓证据按报告期展示，盘中放量事件的买方待核验。</p>
+      </details>
+    </section>
+  </main>
+</body>
+</html>

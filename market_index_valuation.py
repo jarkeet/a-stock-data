@@ -55,6 +55,7 @@ INDICES = {
     "931787": ("931787", "港股创新药", "港股"),
 }
 DJ_LIST_URL = "https://danjuanfunds.com/djapi/index_eva/dj"
+DJ_HISTORY_URL = "https://danjuanfunds.com/djapi/index_eva/{metric}_history/{symbol}"
 DJ_SYMBOLS = {"931079": "CSI931079"}
 EM_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 HSTECH_KLINE_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
@@ -75,6 +76,12 @@ MAINLAND_BALANCED_METRICS = {
     "000001": ("pb",), "399001": ("pe", "pb"), "399006": ("pe", "pb"),
     "980017": ("pe", "pb"), "000813": ("pe", "pb"),
 }
+BALANCED_PB_FALLBACK_CODES = {
+    "000016", "000300", "000688", "000819", "000852", "000905", "000906",
+    "000922", "000928", "000932", "000933", "399965", "399967", "399975",
+    "399976", "399986", "399997", "399998", "H30184", "H30590",
+    "930851", "930986", "931079", "931160", "931494",
+}
 HK_INDICES = {
     "hsi": {"symbol": "HSI", "snapshot": "HKHSI", "start": "1969-11-24", "source":
             "https://www.hsi.com.hk/en-hk/indexes/all-indexes/index-details/?seriesCode=hsi"},
@@ -93,6 +100,7 @@ WEIGHT_URL = (
 )
 CACHE = ROOT / "market_index_valuations.json"
 CACHE_VERSION = 6
+MIN_HISTORY_WEEKS = 52
 MARKET_TZ = ZoneInfo("Asia/Shanghai")
 _LOCK = Lock()
 _LOG = logging.getLogger(__name__)
@@ -217,6 +225,24 @@ def _refresh_danjuan(cached, now, slot):
             "roe": round(100 * roe, 6) if math.isfinite(roe) else None,
         }
         cached["records"].setdefault(slug, {}).setdefault("valuations", {})[day] = observation
+
+
+def _danjuan_valuation_history(symbol, metric, latest):
+    payload = _get(DJ_HISTORY_URL.format(metric=metric, symbol=symbol),
+                   user_agent="Mozilla/5.0", params={"day": "all"}).json()
+    if payload.get("result_code") != 0:
+        raise ValueError(f"Unexpected Xueqiu {metric} history for {symbol}")
+    rows = {}
+    for row in payload["data"][f"index_eva_{metric}_growths"]:
+        if (value := _number(row.get(metric))) is None:
+            continue
+        try:
+            day = _quote_date(row["ts"])
+        except (ValueError, TypeError, OverflowError, OSError):
+            continue
+        if day <= latest:
+            rows[day] = value
+    return rows
 
 
 def _balanced_valuation_history(spec, metric, today):
@@ -457,7 +483,36 @@ def _refresh(cached, now, slot, slugs):
     return {**cached, "version": CACHE_VERSION, "slot": slot, "records": records}
 
 
-def load_index_valuations():
+def _refresh_detail_history(slug, record, now, slot):
+    if record.get("chartHistorySlot") == slot:
+        return False
+    code = INDICES[slug][0]
+    symbol = _danjuan_symbol(slug, code)
+    if symbol and (record.get("valuations") or record.get("pb_api")):
+        cutoff = 17 if slug in HK_INDICES else 16
+        latest = now.date() if now.hour >= cutoff else now.date() - timedelta(days=1)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            jobs = {metric: pool.submit(_danjuan_valuation_history, symbol, metric, latest.isoformat())
+                    for metric in ("pe", "pb")}
+            for metric, job in jobs.items():
+                rows = _result(job, f"{slug} Xueqiu {metric} history")
+                if rows and len(_weekly_points(rows)) > MIN_HISTORY_WEEKS + 1:
+                    record.setdefault("danjuanHistory", {}).setdefault(metric, {}).update(rows)
+
+    if (code in BALANCED_PB_FALLBACK_CODES and not record.get("danjuanHistory", {}).get("pb")
+            and not record.get("balancedRows", {}).get("pb")):
+        try:
+            rows = _balanced_valuation_history({"symbol": code}, "pb", now.date())
+        except (requests.RequestException, ValueError, KeyError, TypeError) as error:
+            _LOG.warning("%s PB history: %s", slug, error)
+        else:
+            record.setdefault("balancedPbHistory", {}).update(rows)
+
+    record["chartHistorySlot"] = slot
+    return True
+
+
+def load_index_valuations(slug=None):
     """Refresh each source at most once per Shanghai day session and retain last good data."""
     now = datetime.now(MARKET_TZ)
     slot = f"{now:%Y-%m-%d}-{'evening' if now.hour >= 18 else 'day'}"
@@ -503,6 +558,9 @@ def load_index_valuations():
         if cached.get("danjuanSlot") != slot:
             _refresh_danjuan(cached, now, slot)
             changed = True
+        if slug in INDICES and INDICES[slug][0] != GOLD_ETF_CODE:
+            record = cached["records"][slug]
+            changed = _refresh_detail_history(slug, record, now, slot) or changed
         if changed:
             _atomic_json(cached, CACHE)
     return cached["records"]
@@ -537,7 +595,7 @@ def _weekly_valuation_percentiles(values):
     dates = [pd.Timestamp(day) for day, _ in values]
     ratios = [value for _, value in values]
     points = []
-    minimum = 52
+    minimum = MIN_HISTORY_WEEKS
     window = pd.DateOffset(years=10)
     for i in range(minimum, len(values)):
         start = bisect_left(dates, dates[i] - window)
@@ -595,16 +653,33 @@ def _apply_danjuan(entry, record, symbol, include_history):
             same_source.update({day: (obs["value"], obs["pct"]) for day, obs in pb_legacy.items()})
         same_source.update({day: (obs[metric], obs.get(metric + "Pct")) for day, obs in observations.items()
                             if obs.get(metric) is not None})
-        if not same_source:
+        if same_source:
+            day = max(same_source)
+            value, pct = same_source[day]
+            entry.update({metric: value, metric + "Date": day, metric + "Pct": pct, metric + "Source": "danjuan"})
+            if metric == "pb":
+                entry["pbCoverage"] = None
+        if not include_history:
             continue
-        if metric == "pe" and include_history and entry["peSource"] != "danjuan" and entry.get("peValues"):
-            entry["referencePe"] = {"source": entry["peSource"], "values": entry["peValues"]}
-        values = [[day, value] for day, (value, _) in sorted(same_source.items())]
-        history = [[day, pct] for day, (_, pct) in sorted(same_source.items()) if pct is not None]
-        entry.update(_metric_entry(metric, "danjuan", values, history, include_history))
-        if metric == "pb":
-            entry["pbCoverage"] = None
-        elif include_history:
+        if rows := record.get("danjuanHistory", {}).get(metric):
+            if metric == "pe" and entry.get("peValues"):
+                entry["referencePe"] = {"source": entry["peHistorySource"], "values": entry["peValues"]}
+            values = _weekly_points(rows)
+            history = _weekly_valuation_percentiles(values)
+            source = "danjuan"
+        elif metric == "pb" and (rows := record.get("balancedPbHistory")):
+            values = _weekly_points(rows)
+            history = _weekly_valuation_percentiles(values)
+            source = "balanced"
+        elif not entry.get(metric + "Values") and not entry.get(metric + "History") and same_source:
+            points = sorted(same_source.items())
+            values = [[day, value] for day, (value, _) in points]
+            history = [[day, pct] for day, (_, pct) in points if pct is not None]
+            source = "danjuanSnapshot"
+        else:
+            continue
+        entry.update({metric + "Values": values, metric + "History": history, metric + "HistorySource": source})
+        if metric == "pe":
             entry["start"] = values[0][0]
     if include_history and symbol:
         entry["snapshotSymbol"] = symbol
@@ -643,13 +718,13 @@ def _hk_entry(slug, record, include_history):
             "start": entry["peValues"][0][0] if entry["peValues"] else None,
             "csiSource": spec["source"], "snapshotSymbol": spec.get("snapshot"),
             "closeHistory": [[day, round(value, 2)] for day, value in _weekly_points(closes)],
-            "valuationHistorySource": entry["peSource"],
+            "valuationHistorySource": entry.get("peHistorySource"),
         })
     return entry
 
 
 def index_valuation_data(slug=None):
-    raw = load_index_valuations()
+    raw = load_index_valuations(slug)
     entries = []
     for key, (code, name, category) in INDICES.items():
         if slug is not None and key != slug:
